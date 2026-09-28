@@ -12,6 +12,7 @@ same pattern as test_openclaw_unit.py.
 """
 import importlib.util
 import os
+import re
 import sys
 import types
 
@@ -287,12 +288,17 @@ def test_a_retry_after_beyond_the_budget_is_not_waited_out(llm, monkeypatch):
 
 # --- two timeouts in a row must both reach the user --------------------------
 
-def test_the_notice_carries_the_time_so_repeats_are_not_identical(llm, monkeypatch):
+def test_the_notice_carries_the_time_to_the_millisecond(llm):
+    assert re.search(r"timed out at \d{2}:\d{2}:\d{2}\.\d{3}", llm._llm_timeout_command())
+
+
+def test_two_notices_differ_even_inside_the_same_millisecond(llm, monkeypatch):
     """`send` drops a message equal to the last one it sent, so two notices in a
-    row have to differ or the second turn goes unanswered."""
-    clock = iter(["05:14:17", "05:15:52"])
-    monkeypatch.setattr(llm.time, "strftime", lambda fmt: next(clock))
+    row have to differ or the second turn goes unanswered. The clock alone cannot
+    guarantee that, so the count has to carry it."""
+    frozen = types.SimpleNamespace(strftime=lambda fmt: "05:14:17.000000")
+    monkeypatch.setattr(llm, "datetime", types.SimpleNamespace(now=lambda: frozen))
     first = llm._llm_timeout_command()
     second = llm._llm_timeout_command()
-    assert "05:14:17" in first and "05:15:52" in second
+    assert "05:14:17.000" in first and "05:14:17.000" in second
     assert first != second

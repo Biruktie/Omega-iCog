@@ -1,4 +1,5 @@
 import os, hashlib, time
+from datetime import datetime
 import openai
 from typing import Optional, Tuple, Dict, Any
 from config import config_get_by_key
@@ -25,9 +26,10 @@ LLM_TIMEOUT_MESSAGE = (
     "LLM request timed out at {time}. Please try again later."
     "\n\n"
     "If you are the Omega administrator: the provider did not answer within the "
-    "request timeout, and a timed-out request is not retried. The failed request "
-    "is in the agent log; check the provider status and, if its answers are "
-    "simply slow, raise the timeout of its route in the proxy configuration."
+    "request timeout, and a timed-out request is not retried. This is timeout "
+    "notice {count} since the agent started. The failed request is in the agent "
+    "log; check the provider status and, if its answers are simply slow, raise "
+    "the timeout of its route in the proxy configuration."
 )
 
 # Statuses a gateway returns when the upstream did not answer in time.
@@ -108,15 +110,22 @@ def _is_timeout_error(error: BaseException) -> bool:
         return True
     return getattr(error, "status_code", None) in GATEWAY_TIMEOUT_STATUSES
 
+_timeout_notices = 0
+
 def _llm_timeout_command() -> str:
     """Return a status message as a MeTTa `send` command when the request times
     out, so the turn ends with the user told instead of in silence.
 
-    The message carries the time. `send` drops a message equal to the last one it
-    sent, so without it a second timeout in a row would leave that turn silent,
-    which is the symptom this whole change is about.
+    `send` drops a message equal to the last one it sent, so two notices must
+    never render the same: a second timeout would leave that turn silent, which is
+    the symptom this whole change is about. The time alone does not guarantee it,
+    since two cycles can fail inside the same second, so the notice carries the
+    time to the millisecond and a count that rises with every notice.
     """
-    message = LLM_TIMEOUT_MESSAGE.format(time=time.strftime("%H:%M:%S"))
+    global _timeout_notices
+    _timeout_notices += 1
+    stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    message = LLM_TIMEOUT_MESSAGE.format(time=stamp, count=_timeout_notices)
     return f"(send {quote_arg(message)})"
 
 def _is_transient_error(error: BaseException) -> bool:
