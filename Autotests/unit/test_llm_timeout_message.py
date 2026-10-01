@@ -400,3 +400,45 @@ def test_the_notice_names_the_limit_and_both_places_that_hold_it(llm):
     notice = llm._llm_timeout_command()
     assert "600 s request timeout" in notice
     assert "raising both" in notice
+
+
+# --- every chat client carries the same limits -------------------------------
+
+@pytest.fixture(scope="module")
+def openrouter(llm):
+    """OpenRouter overrides _create_client, so it needs checking on its own."""
+    providers_stub = types.ModuleType("providers")
+    providers_stub.LLMProvider = object
+    providers_stub.registerLLMProvider = lambda name, provider: None
+    saved = {name: sys.modules.get(name) for name in ("providers", "lib_llm_ext", "openai", "config")}
+    sys.modules["providers"] = providers_stub
+    sys.modules["lib_llm_ext"] = llm
+    sys.modules["openai"] = llm.openai
+    config_stub = types.ModuleType("config")
+    config_stub.config_get_by_key = lambda key, default=None: default
+    sys.modules["config"] = config_stub
+    try:
+        yield _load("openrouter_under_test", os.path.join(_REPO_ROOT, "providers", "openrouter.py"))
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+def test_the_openrouter_client_carries_the_same_limits(openrouter, llm, monkeypatch):
+    captured = {}
+
+    def recorder(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(llm.openai, "OpenAI", recorder)
+    monkeypatch.setattr(openrouter, "config_get_by_key",
+                        lambda key, default=None: "http://localhost:8080" if key == "GATEWAY_URL" else default)
+    provider = openrouter.OpenRouterProviderImpl("OpenRouter", "OPENROUTER_API_KEY", "z-ai/glm-5.2",
+                                                 "https://openrouter.ai/api/v1")
+    assert provider._create_client() is not None
+    assert captured["max_retries"] == llm.CHAT_MAX_RETRIES
+    assert captured["timeout"] == llm.CHAT_REQUEST_TIMEOUT_SECONDS
