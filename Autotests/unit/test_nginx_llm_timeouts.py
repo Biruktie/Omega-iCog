@@ -17,7 +17,22 @@ _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."
 _TEMPLATE = os.path.join(_REPO_ROOT, "proxy", "nginx.conf.template")
 
 LLM_ROUTES = ["anthropic", "asicloud", "openai", "asione", "openaiapi", "openrouter"]
-CLIENT_TIMEOUT_SECONDS = 600
+_PROVIDER_SOURCE = os.path.join(_REPO_ROOT, "providers", "lib_llm_ext.py")
+
+
+def _client_timeout_seconds():
+    """The timeout the providers give their client, read from the source rather
+    than repeated here: the route has to wait at least as long, and the two must
+    not drift apart. The module itself is not imported, since the provider SDK is
+    not installed where this suite runs.
+    """
+    with open(_PROVIDER_SOURCE, encoding="utf-8") as f:
+        match = re.search(r"^CHAT_REQUEST_TIMEOUT_SECONDS\s*=\s*(\d+)", f.read(), re.MULTILINE)
+    assert match, "providers/lib_llm_ext.py no longer defines CHAT_REQUEST_TIMEOUT_SECONDS"
+    return int(match.group(1))
+
+
+CLIENT_TIMEOUT_SECONDS = _client_timeout_seconds()
 
 _UNITS = {"s": 1, "m": 60, "h": 3600}
 
