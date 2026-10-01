@@ -7,6 +7,10 @@ from src.helper import quote_arg
 from src.logger import get_logger
 
 PROMPT_DELIMITER = ":-:-:-:"
+# The loop tags the human message it appends after the delimiter. Everything else
+# that can land there, the spamShield reminder or nothing at all, is not a turn of
+# its own.
+HUMAN_MESSAGE_MARKER = "HUMAN-MSG:"
 LLM_EMPTY_RESPONSE_MESSAGE = (
     "The agent didn\'t return an answer: reasoning exceeded the token limit for "
     "this response before it could produce one."
@@ -29,7 +33,7 @@ LLM_TIMEOUT_MESSAGE = (
     "{timeout} s request timeout, and a timed-out request is not retried. This is "
     "timeout notice {count} since the agent started. The failed request is in the "
     "agent log; check the provider status. The limit is enforced by the client and "
-    "by the provider\'s route in the proxy, so allowing longer answers means "
+    "by the provider's route in the proxy, so allowing longer answers means "
     "raising both."
 )
 
@@ -49,7 +53,7 @@ CHAT_MAX_RETRIES = 0
 
 # Failures worth trying again right away. The SDK retries 409, 429 and any 5xx,
 # so keep that rule rather than a list that misses one (529 and 522 both reach
-# here); the timeout statuses are excluded by _is_timeout_error above, so they are
+# here). The timeout statuses are excluded by _is_timeout_error, so they are
 # reported instead of retried.
 TRANSIENT_STATUSES = (409, 429)
 # First attempt plus two retries, and only while the whole call stays inside the
@@ -254,13 +258,15 @@ class AIProvider(AbstractAIProvider):
         """A prompt carrying a human message starts a fresh turn, which deserves
         its own answer even if the previous cycle already timed out.
 
-        The tail is read straight from the prompt rather than through
-        _split_system_user, which substitutes a placeholder when it is empty. The
-        loop fills the tail only on the cycle where the message is new, so any
-        tail here means a turn of its own.
+        Only a tagged message counts. The tail also carries the spamShield
+        reminder on every follow-up cycle when that option is on, and treating
+        that as a turn would bring back one notice per cycle. The tail is read
+        straight from the prompt rather than through _split_system_user, which
+        substitutes a placeholder when it is empty.
         """
         _, delimiter, tail = content.partition(PROMPT_DELIMITER)
-        if (tail if delimiter else content).strip():
+        tail = (tail if delimiter else content).lstrip(" ([\"'")
+        if tail.startswith(HUMAN_MESSAGE_MARKER):
             self._timeout_notice_sent = False
 
     def _answered(self) -> None:

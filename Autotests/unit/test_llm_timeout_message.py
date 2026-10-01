@@ -366,13 +366,27 @@ def test_a_new_human_message_starts_a_new_run(llm):
     assert provider.chat(_prompt()) == ""
 
 
-def test_every_prompt_carrying_a_message_gets_its_own_notice(llm):
-    """The loop puts the message in the prompt only on the cycle where it is new,
-    so a tail here always means a turn that is waiting for an answer."""
+def test_every_tagged_message_gets_its_own_notice(llm):
     provider = _scripted_provider(llm, [_gateway_error(504)])
     assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: same")))
     assert provider.chat(_prompt()) == ""
     assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: same")))
+
+
+def test_the_tagged_message_is_recognised_however_the_loop_wraps_it(llm):
+    provider = _scripted_provider(llm, [_gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt("(HUMAN-MSG: hello)")))
+    assert provider.chat(_prompt()) == ""
+    assert _is_timeout_notice(provider.chat(_prompt("['HUMAN-MSG:', 'hello']")))
+
+
+def test_the_spamshield_reminder_is_not_a_new_turn(llm):
+    """With spamShield on, the loop puts this in the tail on every follow-up
+    cycle. Taking it for a message would restore one notice per cycle."""
+    provider = _scripted_provider(llm, [_gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: hello")))
+    for _ in range(3):
+        assert provider.chat(_prompt(" DO NOT RE-SEND OR SPAM!")) == ""
 
 
 # --- the client enforces the timeout the notice names ------------------------
