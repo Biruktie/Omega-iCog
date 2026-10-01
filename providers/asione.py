@@ -49,6 +49,7 @@ class ASIOneProviderImpl(llm.AIProvider):
 
     def chat(self, content: str, max_tokens: int = 6000, reasoning: str = "medium", **kwargs) -> str:
         """Send chat request, initializing client if needed."""
+        self._start_of_turn(content)
         self._ensure_client()
 
         if self._client is None:
@@ -72,6 +73,7 @@ class ASIOneProviderImpl(llm.AIProvider):
                 self._name,
             )
 
+            self._answered()
             raw = response.choices[0].message.content or ""
             finish_reason = getattr(response.choices[0], "finish_reason", None)
             llm._log_raw(self._name, self._model_name, raw)
@@ -85,5 +87,5 @@ class ASIOneProviderImpl(llm.AIProvider):
         except Exception as e:
             logger.exception(f"[ASIOneProviderImpl.chat]: Exception while communicating with LLM: {e}")
             if llm._is_timeout_error(e):
-                return llm._llm_timeout_command()
+                return self._timeout_reply()
             return ""

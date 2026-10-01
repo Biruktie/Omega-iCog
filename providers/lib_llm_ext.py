@@ -26,14 +26,20 @@ LLM_TIMEOUT_MESSAGE = (
     "LLM request timed out at {time}. Please try again later."
     "\n\n"
     "If you are the Omega administrator: the provider did not answer within the "
-    "request timeout, and a timed-out request is not retried. This is timeout "
-    "notice {count} since the agent started. The failed request is in the agent "
-    "log; check the provider status and, if its answers are simply slow, raise "
-    "the timeout of its route in the proxy configuration."
+    "{timeout} s request timeout, and a timed-out request is not retried. This is "
+    "timeout notice {count} since the agent started. The failed request is in the "
+    "agent log; check the provider status. The limit is enforced by the client and "
+    "by the provider\'s route in the proxy, so allowing longer answers means "
+    "raising both."
 )
 
 # Statuses a gateway returns when the upstream did not answer in time.
 GATEWAY_TIMEOUT_STATUSES = (408, 504, 524)
+
+# The request timeout the client enforces. It matches the proxy route timeout, so
+# a slow answer is cut once, by whichever limit is reached first, and the notice
+# can name a single number.
+CHAT_REQUEST_TIMEOUT_SECONDS = 600
 
 # One attempt per chat request inside the SDK. Its retry loop repeats a timed-out
 # request unconditionally, which would multiply the request timeout before the
@@ -125,7 +131,8 @@ def _llm_timeout_command() -> str:
     global _timeout_notices
     _timeout_notices += 1
     stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    message = LLM_TIMEOUT_MESSAGE.format(time=stamp, count=_timeout_notices)
+    message = LLM_TIMEOUT_MESSAGE.format(
+        time=stamp, count=_timeout_notices, timeout=CHAT_REQUEST_TIMEOUT_SECONDS)
     return f"(send {quote_arg(message)})"
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -241,6 +248,39 @@ class AIProvider(AbstractAIProvider):
         self._model_name = model_name
         self._base_url = base_url
         self._client = None  # lazy initialization
+        self._timeout_notice_sent = False
+
+    def _start_of_turn(self, content: str) -> None:
+        """A prompt carrying a human message starts a fresh turn, which deserves
+        its own answer even if the previous cycle already timed out.
+
+        The tail is read straight from the prompt rather than through
+        _split_system_user, which substitutes a placeholder when it is empty. The
+        loop fills the tail only on the cycle where the message is new, so any
+        tail here means a turn of its own.
+        """
+        _, delimiter, tail = content.partition(PROMPT_DELIMITER)
+        if (tail if delimiter else content).strip():
+            self._timeout_notice_sent = False
+
+    def _answered(self) -> None:
+        """The provider answered, so the next timeout is a new run."""
+        self._timeout_notice_sent = False
+
+    def _timeout_reply(self) -> str:
+        """The notice for a timed-out request, once per run of timeouts.
+
+        The loop keeps calling for up to maxNewInputLoops cycles, so a notice per
+        cycle would fill the chat with the same text. The run ends when a call
+        succeeds or a new human message arrives; until then the timeout is logged
+        and nothing is sent.
+        """
+        if self._timeout_notice_sent:
+            logger.warning(
+                f"[{self.name}.chat]: timed out again, the user was already told")
+            return ""
+        self._timeout_notice_sent = True
+        return _llm_timeout_command()
 
     def _ensure_client(self):
         """Initialize client on first use."""
@@ -258,10 +298,12 @@ class AIProvider(AbstractAIProvider):
                     api_key="proxy",
                     base_url=base_url,
                     max_retries=CHAT_MAX_RETRIES,
+                    timeout=CHAT_REQUEST_TIMEOUT_SECONDS,
                     )
         if self._var_name in os.environ:
             return openai.OpenAI(api_key=os.environ.get(self._var_name), base_url=self._base_url,
-                                 max_retries=CHAT_MAX_RETRIES)
+                                 max_retries=CHAT_MAX_RETRIES,
+                                 timeout=CHAT_REQUEST_TIMEOUT_SECONDS)
 
         return None
 
@@ -283,6 +325,7 @@ class AIProvider(AbstractAIProvider):
 
     def chat(self, content: str, max_tokens: int = 6000, reasoning: str = "medium", **kwargs) -> str:
         """Send chat request, initializing client if needed."""
+        self._start_of_turn(content)
         self._ensure_client()
 
         if self._client is None:
@@ -299,6 +342,7 @@ class AIProvider(AbstractAIProvider):
                 self._name,
             )
 
+            self._answered()
             raw = response.choices[0].message.content or ""
             finish_reason = getattr(response.choices[0], "finish_reason", None)
             _log_raw(self._name, self._model_name, raw)
@@ -312,7 +356,7 @@ class AIProvider(AbstractAIProvider):
         except Exception as e:
             logger.exception(f"[AIProvider.chat]: Exception while communicating with LLM: {e}")
             if _is_timeout_error(e):
-                return _llm_timeout_command()
+                return self._timeout_reply()
             return ""
 
     def _clean_text(self, text: str) -> str:

@@ -31,6 +31,7 @@ class OpenAIProviderImpl(llm.AIProvider):
 
     def chat(self, content: str, max_tokens: int = 6000, reasoning: str = "medium", **kwargs) -> str:
         """Send chat request via the Responses API, initializing client if needed."""
+        self._start_of_turn(content)
         self._ensure_client()
 
         if self._client is None:
@@ -55,6 +56,7 @@ class OpenAIProviderImpl(llm.AIProvider):
 
             response = llm._retrying(lambda: self._client.responses.create(**create_kwargs), self._name)
 
+            self._answered()
             raw = response.output_text or ""
             incomplete_details = getattr(response, "incomplete_details", None)
             incomplete_reason = getattr(incomplete_details, "reason", None)
@@ -68,5 +70,5 @@ class OpenAIProviderImpl(llm.AIProvider):
         except Exception as e:
             logger.exception(f"[OpenAIProviderImpl.chat]: Exception while communicating with LLM: {e}")
             if llm._is_timeout_error(e):
-                return llm._llm_timeout_command()
+                return self._timeout_reply()
             return ""

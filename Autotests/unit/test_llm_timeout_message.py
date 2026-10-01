@@ -302,3 +302,87 @@ def test_two_notices_differ_even_inside_the_same_millisecond(llm, monkeypatch):
     second = llm._llm_timeout_command()
     assert "05:14:17.000" in first and "05:14:17.000" in second
     assert first != second
+
+
+# --- one notice per run of timeouts ------------------------------------------
+
+SYSTEM_PART = "PROMPT: you are an agent"
+
+
+def _prompt(human=""):
+    return f"{SYSTEM_PART} :-:-:-: {human}"
+
+
+def _reply(text='(send "hello")'):
+    message = types.SimpleNamespace(content=text)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message, finish_reason="stop")],
+                                 usage=None)
+
+
+class _ScriptedClient:
+    """Chat client that walks a list of steps: an exception is raised, anything
+    else is returned. The last step repeats."""
+
+    def __init__(self, steps):
+        self.calls = 0
+
+        def create(**kwargs):
+            self.calls += 1
+            step = steps[min(self.calls, len(steps)) - 1]
+            if isinstance(step, BaseException):
+                raise step
+            return step
+
+        self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+
+
+def _scripted_provider(llm, steps):
+    provider = llm.AIProvider("OpenAIAPI", "OPENAIAPI_API_KEY", "test-model", "http://localhost/v1/")
+    provider._client = _ScriptedClient(steps)
+    return provider
+
+
+def test_only_the_first_timeout_of_a_run_is_reported(llm):
+    provider = _scripted_provider(llm, [_gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt()))
+    assert provider.chat(_prompt()) == ""
+    assert provider.chat(_prompt()) == ""
+
+
+def test_a_successful_answer_starts_a_new_run(llm):
+    provider = _scripted_provider(llm, [_gateway_error(504), _reply(), _gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt()))
+    assert provider.chat(_prompt()) == '(send "hello")'
+    assert _is_timeout_notice(provider.chat(_prompt()))
+
+
+def test_a_new_human_message_starts_a_new_run(llm):
+    """The user who just wrote deserves an answer, even if the previous cycle
+    already reported a timeout."""
+    provider = _scripted_provider(llm, [_gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: first")))
+    assert provider.chat(_prompt()) == ""
+    assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: second")))
+    assert provider.chat(_prompt()) == ""
+
+
+def test_every_prompt_carrying_a_message_gets_its_own_notice(llm):
+    """The loop puts the message in the prompt only on the cycle where it is new,
+    so a tail here always means a turn that is waiting for an answer."""
+    provider = _scripted_provider(llm, [_gateway_error(504)])
+    assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: same")))
+    assert provider.chat(_prompt()) == ""
+    assert _is_timeout_notice(provider.chat(_prompt("HUMAN-MSG: same")))
+
+
+# --- the client enforces the timeout the notice names ------------------------
+
+def test_the_client_enforces_the_request_timeout(llm, monkeypatch):
+    assert _client_kwargs(llm, monkeypatch, "http://localhost:8080")["timeout"] == llm.CHAT_REQUEST_TIMEOUT_SECONDS
+    assert llm.CHAT_REQUEST_TIMEOUT_SECONDS == 600
+
+
+def test_the_notice_names_the_limit_and_both_places_that_hold_it(llm):
+    notice = llm._llm_timeout_command()
+    assert "600 s request timeout" in notice
+    assert "raising both" in notice
