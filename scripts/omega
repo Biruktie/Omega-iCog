@@ -804,7 +804,7 @@ for name in ("system.posix_acl_access", "system.posix_acl_default"):
         if exc.errno in unsupported:
             sys.exit(2)
         sys.exit(2)
-    else
+    else:
         sys.exit(0)
 sys.exit(1)
 PY
