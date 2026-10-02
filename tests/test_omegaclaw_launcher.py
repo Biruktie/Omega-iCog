@@ -1,11 +1,14 @@
 import os
 import shutil
 import shlex
+import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+from scripts import memory_transfer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +22,15 @@ def _load_installer_namespace():
         "\nPY\n", 1
     )[0]
     namespace = {"__name__": "omega_installer"}
-    exec(compile(installer_source, str(LAUNCHER), "exec"), namespace)
+    previous_script_dir = os.environ.get("OMEGA_SCRIPT_DIR")
+    os.environ["OMEGA_SCRIPT_DIR"] = str(REPO_ROOT / "scripts")
+    try:
+        exec(compile(installer_source, str(LAUNCHER), "exec"), namespace)
+    finally:
+        if previous_script_dir is None:
+            del os.environ["OMEGA_SCRIPT_DIR"]
+        else:
+            os.environ["OMEGA_SCRIPT_DIR"] = previous_script_dir
     return namespace
 
 
@@ -63,11 +74,17 @@ def _run_launcher(
     python3 = bin_dir / "python3"
     python3.write_text(
         "#!/bin/sh\n"
+        "if [ \"${1##*/}\" = \"memory_transfer.py\" ]; then\n"
+        "  exit 0\n"
+        "fi\n"
         "if [ \"$1\" = \"-c\" ]; then\n"
         f"  echo '{os.geteuid()} {os.geteuid()} {transfer_gid} 1528'\n"
         "  exit 0\n"
         "fi\n"
-        "if [ \"$1\" = \"-\" ]; then exit 1; fi\n"
+        "if [ \"$1\" = \"-\" ]; then\n"
+        "  if grep -qx '    else:'; then exit 1; fi\n"
+        "  exit 2\n"
+        "fi\n"
         f"exec {shlex.quote(sys.executable)} \"$@\"\n",
         encoding="utf-8",
     )
@@ -99,13 +116,54 @@ def test_installer_records_private_group_for_existing_transfer_directory(tmp_pat
     answers = iter(["y", str(transfer_dir), str(group_id), "n"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
-    memory_transfer_dir, memory_transfer_gid, memory_export_enabled = _load_installer_namespace()[
-        "_choose_memory_transfer"
-    ]()
+    installer = _load_installer_namespace()
+    monkeypatch.setitem(installer, "validate_memory_transfer_dir", lambda *_: None)
+    memory_transfer_dir, memory_transfer_gid, memory_export_enabled = installer["_choose_memory_transfer"]()
 
     assert memory_transfer_dir == str(transfer_dir)
     assert memory_transfer_gid == str(group_id)
     assert memory_export_enabled == "0"
+
+
+def test_installer_rejects_unprepared_transfer_directory_before_export_prompt(tmp_path, monkeypatch):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    group_id = transfer_dir.stat().st_gid
+    answers = iter(["y", str(transfer_dir), str(group_id)])
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or next(answers))
+    installer = _load_installer_namespace()
+    monkeypatch.setitem(
+        installer,
+        "validate_memory_transfer_dir",
+        lambda *_: "--memory-transfer-dir must enable setgid",
+    )
+
+    with pytest.raises(StopIteration):
+        installer["_choose_memory_transfer"]()
+
+    assert "Enable memory export for this instance? [y/N]: " not in prompts
+
+
+def test_memory_transfer_validator_accepts_group_protected_directory(tmp_path, monkeypatch):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    group_id = transfer_dir.stat().st_gid
+    monkeypatch.setattr(memory_transfer.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        memory_transfer.os,
+        "stat",
+        lambda _: SimpleNamespace(
+            st_uid=os.geteuid(),
+            st_gid=group_id,
+            st_mode=stat.S_IFDIR | stat.S_ISGID | 0o770,
+        ),
+    )
+    monkeypatch.setattr(memory_transfer, "_has_posix_acl", lambda _: False)
+
+    assert memory_transfer.validate_memory_transfer_dir(
+        str(transfer_dir), str(group_id)
+    ) is None
 
 
 def test_launcher_uses_private_group_for_preflight_and_entrypoint(tmp_path):
@@ -119,6 +177,14 @@ def test_launcher_uses_private_group_for_preflight_and_entrypoint(tmp_path):
     group_id = transfer_dir.stat().st_gid
     assert f"<--user> <65534:65534> <--group-add> <{group_id}>" in result.stdout
     assert f"<-e> <MEMORY_TRANSFER_GID={group_id}>" in result.stdout
+
+
+def test_entrypoint_resolves_transfer_gid_to_a_supplementary_group_name():
+    entrypoint = (REPO_ROOT / "entrypoint.sh").read_text(encoding="utf-8")
+
+    assert 'getent group "${MEMORY_TRANSFER_GID}"' in entrypoint
+    assert 'groupadd --gid "${MEMORY_TRANSFER_GID}" "${memory_transfer_group}"' in entrypoint
+    assert 'su --group nogroup --supp-group "${memory_transfer_group}" nobody' in entrypoint
 
 
 @pytest.mark.skipif(
