@@ -669,8 +669,8 @@ options() {
                 memory_import_only_vector=1
                 shift
                 ;;
-            --version|-v) version; return 0;;
-            --help|-h) help; return 0;;
+            --version|-v) version; exit 0;;
+            --help|-h) help; exit 0;;
             *) help
                return 1
                ;;

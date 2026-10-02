@@ -34,28 +34,9 @@ def _load_installer_namespace():
     return namespace
 
 
-def _run_launcher(
-    tmp_path: Path,
-    *component_options: str,
-    transfer_dir: Path | None = None,
-    transfer_gid: int | None = None,
-    memory_import: bool = True,
-) -> subprocess.CompletedProcess:
-    if transfer_dir is None:
-        transfer_dir = tmp_path
-        transfer_dir.chmod(0o2770)
-    transfer_gid = transfer_gid if transfer_gid is not None else transfer_dir.stat().st_gid
-    launcher_options = [
-        "--memory-transfer-dir",
-        str(transfer_dir),
-        "--memory-transfer-gid",
-        str(transfer_gid),
-    ]
-    if memory_import:
-        archive = transfer_dir / "memory.tar.gz"
-        archive.touch()
-        launcher_options.extend(["--memory-import", archive.name])
-
+def _stub_docker_environment(tmp_path: Path, transfer_gid: int | None = None) -> dict:
+    if transfer_gid is None:
+        transfer_gid = tmp_path.stat().st_gid
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -93,6 +74,32 @@ def _run_launcher(
     environment = os.environ.copy()
     environment["ASI_API_KEY"] = "test-token"
     environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
+    return environment
+
+
+def _run_launcher(
+    tmp_path: Path,
+    *component_options: str,
+    transfer_dir: Path | None = None,
+    transfer_gid: int | None = None,
+    memory_import: bool = True,
+) -> subprocess.CompletedProcess:
+    if transfer_dir is None:
+        transfer_dir = tmp_path
+        transfer_dir.chmod(0o2770)
+    transfer_gid = transfer_gid if transfer_gid is not None else transfer_dir.stat().st_gid
+    launcher_options = [
+        "--memory-transfer-dir",
+        str(transfer_dir),
+        "--memory-transfer-gid",
+        str(transfer_gid),
+    ]
+    if memory_import:
+        archive = transfer_dir / "memory.tar.gz"
+        archive.touch()
+        launcher_options.extend(["--memory-import", archive.name])
+
+    environment = _stub_docker_environment(tmp_path, transfer_gid)
 
     return subprocess.run(
         [
@@ -250,6 +257,31 @@ def test_only_component_options_are_mutually_exclusive(tmp_path):
 
     assert result.returncode != 0
     assert "--only-history and --only-vector cannot be combined" in result.stderr
+
+
+@pytest.mark.parametrize("command", ["start", "stop", "clean"])
+@pytest.mark.parametrize(
+    ("flag", "expected_output"),
+    [
+        ("-h", "Usage:"),
+        ("--help", "Usage:"),
+        ("-v", "Omega version="),
+        ("--version", "Omega version="),
+    ],
+)
+def test_help_and_version_flags_do_not_run_the_command(tmp_path, command, flag, expected_output):
+    result = subprocess.run(
+        [str(LAUNCHER), command, flag],
+        cwd=REPO_ROOT,
+        env=_stub_docker_environment(tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert expected_output in result.stdout
+    assert "docker <" not in result.stdout
 
 
 @pytest.mark.parametrize("removed_option", ["--no-history", "--no-vector"])
