@@ -44,7 +44,7 @@ RUN git clone --depth 1 --branch "${FAISS_REF}" "${FAISS_REPO}" /faiss
 
 WORKDIR /faiss
 RUN cmake -B build -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF -DBUILD_SHARED_LIBS=OFF \
- && cmake --build build --config Release --parallel \
+ && cmake --build build --config Release \
  && cmake --install build
 
 WORKDIR /PeTTa
@@ -107,6 +107,7 @@ RUN apt-get update \
       nginx-light \
       gettext-base \
       poppler-utils \
+      util-linux \
       curl \
  && rm -rf /var/lib/apt/lists/*
 
