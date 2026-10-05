@@ -1,11 +1,87 @@
 #!/usr/bin/env bash
 
+tmp_memory_transfer_validator="$(mktemp "${TMPDIR:-/tmp}/omega-memory-transfer-validator.XXXXXX")"
+chmod 0600 "$tmp_memory_transfer_validator"
+trap 'rm -f "$tmp_memory_transfer_validator"' EXIT
+
+cat >"$tmp_memory_transfer_validator" <<'PY'
+import errno
+import os
+import platform
+import stat
+import sys
+
+
+def has_posix_acl(path):
+    missing = {errno.ENODATA}
+    unsupported = {errno.ENOTSUP, errno.EOPNOTSUPP}
+    for name in ("system.posix_acl_access", "system.posix_acl_default"):
+        try:
+            os.getxattr(path, name, follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno in missing:
+                continue
+            if exc.errno in unsupported:
+                raise RuntimeError("Could not verify ACLs") from exc
+            raise RuntimeError("Could not verify ACLs") from exc
+        else:
+            return True
+    return False
+
+
+def validate_memory_transfer_dir(path, group_id):
+    if platform.system() != "Linux":
+        return "--memory-transfer-dir is supported only on Linux hosts"
+    if not os.path.isabs(path):
+        return f"--memory-transfer-dir must be an absolute path: {path}"
+    if os.path.islink(path):
+        return f"--memory-transfer-dir must not be a symbolic link: {path}"
+    if not os.path.isdir(path):
+        return f"--memory-transfer-dir must be a directory: {path}"
+    if not group_id.isdecimal():
+        return "--memory-transfer-gid must be a numeric private group ID"
+
+    try:
+        directory_stat = os.stat(path)
+    except OSError:
+        return f"Could not inspect --memory-transfer-dir: {path}"
+
+    if directory_stat.st_uid not in (os.geteuid(), 0):
+        return f"--memory-transfer-dir must be owned by the launching user or root: {path}"
+    mode = stat.S_IMODE(directory_stat.st_mode)
+    if not mode & stat.S_ISGID:
+        return f"--memory-transfer-dir must enable setgid so archives inherit its private group: {path}"
+    if has_posix_acl(path):
+        return f"--memory-transfer-dir must not grant access through ACL: {path}"
+    if directory_stat.st_gid != int(group_id):
+        return f"--memory-transfer-dir group must match --memory-transfer-gid: {path}"
+    if mode & 0o007 or mode & 0o070 != 0o070:
+        return (
+            "--memory-transfer-dir must grant rwx to its private group and no access to other users: "
+            f"{path}"
+        )
+    return None
+
+
+if len(sys.argv) != 3:
+    raise SystemExit("Usage: memory-transfer-validator <directory> <group-id>")
+
+try:
+    error = validate_memory_transfer_dir(sys.argv[1], sys.argv[2])
+except RuntimeError as exc:
+    error = f"{exc} for --memory-transfer-dir: {sys.argv[1]}"
+
+if error:
+    print(error, file=sys.stderr)
+    raise SystemExit(1)
+PY
+
 bootstrap() {
 
 # Create temporary files
 tmp_config_file="$(mktemp)"
 tmp_py_file="$(mktemp)"
-trap 'rm -f "$tmp_config_file" "$tmp_py_file"' EXIT
+trap 'rm -f "$tmp_config_file" "$tmp_py_file" "$tmp_memory_transfer_validator"' EXIT
 
 # Lock down permissions immediately after creation
 chmod 0600 "$tmp_config_file"
@@ -19,14 +95,12 @@ import secrets
 import string
 import shlex
 import shutil
+import subprocess
 import sys
 import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
-
-sys.path.insert(0, os.environ["OMEGA_SCRIPT_DIR"])
-from memory_transfer import validate_memory_transfer_dir
 
 LICENSE_TEXT = """\
 
@@ -286,6 +360,16 @@ def _choose_import_kb():
         print("Please enter y or n.")
 
 
+def validate_memory_transfer_dir(path, group_id):
+    result = subprocess.run(
+        [sys.executable, sys.argv[5], path, group_id],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stderr.strip() if result.returncode else None
+
+
 def _choose_memory_transfer():
     while True:
         answer = input("Set up a directory for memory transfer archives? [y/N]: ").strip().lower()
@@ -398,10 +482,9 @@ if __name__ == "__main__":
     config_run_omega(*sys.argv[1:5])
 PY
 
-OMEGA_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" \
 python3 "$tmp_py_file" "$tmp_config_file" \
     "${memory_transfer_dir:-}" "${memory_transfer_gid:-}" \
-    "${memory_export_enabled:-0}" </dev/tty
+    "${memory_export_enabled:-0}" "$tmp_memory_transfer_validator" </dev/tty
 
 . "$tmp_config_file"
 
@@ -762,10 +845,7 @@ options() {
 }
 
 prepare_memory_transfer_dir() {
-    local script_dir
-
-    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-    python3 "${script_dir}/memory_transfer.py" "${memory_transfer_dir}" "${memory_transfer_gid}"
+    python3 "$tmp_memory_transfer_validator" "${memory_transfer_dir}" "${memory_transfer_gid}"
 }
 
 start() {

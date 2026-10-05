@@ -1,8 +1,5 @@
-import importlib.util
 import os
 import shutil
-import shlex
-import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -16,38 +13,19 @@ LAUNCHER = REPO_ROOT / "scripts" / "omega"
 CONTAINER_TEST_IMAGE = os.environ.get("OMEGA_LAUNCHER_TEST_IMAGE", "")
 
 
-def _load_memory_transfer_module():
-    spec = importlib.util.spec_from_file_location(
-        "memory_transfer_under_test", REPO_ROOT / "scripts" / "memory_transfer.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-memory_transfer = _load_memory_transfer_module()
-
-
 def _load_installer_namespace():
     launcher_source = LAUNCHER.read_text(encoding="utf-8")
     installer_source = launcher_source.split("cat >\"$tmp_py_file\" <<'PY'\n", 1)[1].split(
         "\nPY\n", 1
     )[0]
     namespace = {"__name__": "omega_installer"}
-    previous_script_dir = os.environ.get("OMEGA_SCRIPT_DIR")
-    os.environ["OMEGA_SCRIPT_DIR"] = str(REPO_ROOT / "scripts")
-    try:
-        exec(compile(installer_source, str(LAUNCHER), "exec"), namespace)
-    finally:
-        if previous_script_dir is None:
-            del os.environ["OMEGA_SCRIPT_DIR"]
-        else:
-            os.environ["OMEGA_SCRIPT_DIR"] = previous_script_dir
+    exec(compile(installer_source, str(LAUNCHER), "exec"), namespace)
     return namespace
 
 
-def _stub_docker_environment(tmp_path: Path, transfer_gid: int | None = None) -> dict:
+def _stub_docker_environment(
+    tmp_path: Path, transfer_gid: int | None = None, stub_runtime_validator: bool = True
+) -> dict:
     if transfer_gid is None:
         transfer_gid = tmp_path.stat().st_gid
     bin_dir = tmp_path / "bin"
@@ -65,17 +43,17 @@ def _stub_docker_environment(tmp_path: Path, transfer_gid: int | None = None) ->
     uname = bin_dir / "uname"
     uname.write_text("#!/bin/sh\necho Linux\n", encoding="utf-8")
     uname.chmod(0o755)
-    python3 = bin_dir / "python3"
-    python3.write_text(
-        "#!/bin/sh\n"
-        "if [ \"${1##*/}\" = \"memory_transfer.py\" ]; then\n"
-        "  exit 0\n"
-        "fi\n"
-        f"exec {shlex.quote(sys.executable)} \"$@\"\n",
-        encoding="utf-8",
-    )
-    python3.chmod(0o755)
-
+    if stub_runtime_validator:
+        python3 = bin_dir / "python3"
+        python3.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  *omega-memory-transfer-validator*) exit 0 ;;\n"
+            "esac\n"
+            f"exec {sys.executable!s} \"$@\"\n",
+            encoding="utf-8",
+        )
+        python3.chmod(0o755)
     environment = os.environ.copy()
     environment["ASI_API_KEY"] = "test-token"
     environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
@@ -88,6 +66,7 @@ def _run_launcher(
     transfer_dir: Path | None = None,
     transfer_gid: int | None = None,
     memory_import: bool = True,
+    stub_runtime_validator: bool = True,
 ) -> subprocess.CompletedProcess:
     if transfer_dir is None:
         transfer_dir = tmp_path
@@ -104,7 +83,9 @@ def _run_launcher(
         archive.touch()
         launcher_options.extend(["--memory-import", archive.name])
 
-    environment = _stub_docker_environment(tmp_path, transfer_gid)
+    environment = _stub_docker_environment(
+        tmp_path, transfer_gid, stub_runtime_validator=stub_runtime_validator
+    )
 
     return subprocess.run(
         [
@@ -158,33 +139,46 @@ def test_installer_explains_how_to_skip_unprepared_transfer_directory(tmp_path, 
     assert "answer n at the next prompt to continue without memory transfer" in capsys.readouterr().err
 
 
-def test_memory_transfer_validator_accepts_group_protected_directory(tmp_path, monkeypatch):
+def test_installer_uses_shared_memory_transfer_validator(tmp_path, monkeypatch):
     transfer_dir = tmp_path / "memory-transfer"
     transfer_dir.mkdir()
     group_id = transfer_dir.stat().st_gid
-    monkeypatch.setattr(memory_transfer.platform, "system", lambda: "Linux")
+    installer = _load_installer_namespace()
+    captured = {}
     monkeypatch.setattr(
-        memory_transfer.os,
-        "stat",
-        lambda _: SimpleNamespace(
-            st_uid=os.geteuid(),
-            st_gid=group_id,
-            st_mode=stat.S_IFDIR | stat.S_ISGID | 0o770,
-        ),
+        installer["subprocess"],
+        "run",
+        lambda command, **kwargs: captured.update(command=command, kwargs=kwargs)
+        or SimpleNamespace(returncode=0, stderr=""),
     )
-    monkeypatch.setattr(memory_transfer, "_has_posix_acl", lambda _: False)
+    monkeypatch.setattr(installer["sys"], "argv", ["installer", "config", "", "", "", "validator"])
 
-    assert memory_transfer.validate_memory_transfer_dir(
+    assert installer["validate_memory_transfer_dir"](
         str(transfer_dir), str(group_id)
     ) is None
+    assert captured["command"] == [
+        sys.executable,
+        "validator",
+        str(transfer_dir),
+        str(group_id),
+    ]
+    assert captured["kwargs"] == {"capture_output": True, "text": True, "check": False}
 
 
-def test_memory_transfer_validator_rejects_non_linux_hosts(tmp_path, monkeypatch):
+def test_installer_reports_shared_memory_transfer_validator_error(tmp_path, monkeypatch):
     transfer_dir = tmp_path / "memory-transfer"
     transfer_dir.mkdir()
-    monkeypatch.setattr(memory_transfer.platform, "system", lambda: "Darwin")
+    installer = _load_installer_namespace()
+    monkeypatch.setattr(
+        installer["subprocess"],
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stderr="--memory-transfer-dir is supported only on Linux hosts\n"
+        ),
+    )
+    monkeypatch.setattr(installer["sys"], "argv", ["installer", "config", "", "", "", "validator"])
 
-    assert memory_transfer.validate_memory_transfer_dir(
+    assert installer["validate_memory_transfer_dir"](
         str(transfer_dir), str(transfer_dir.stat().st_gid)
     ) == "--memory-transfer-dir is supported only on Linux hosts"
 
@@ -200,6 +194,23 @@ def test_launcher_uses_private_group_for_preflight_and_entrypoint(tmp_path):
     group_id = transfer_dir.stat().st_gid
     assert f"<--user> <65534:65534> <--group-add> <{group_id}>" in result.stdout
     assert f"<-e> <MEMORY_TRANSFER_GID={group_id}>" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="memory transfer directories are Linux-only")
+def test_launcher_executes_runtime_memory_transfer_validation(tmp_path):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    transfer_dir.chmod(0o750)
+
+    result = _run_launcher(
+        tmp_path,
+        transfer_dir=transfer_dir,
+        memory_import=False,
+        stub_runtime_validator=False,
+    )
+
+    assert result.returncode == 1
+    assert "--memory-transfer-dir must enable setgid" in result.stderr
 
 
 def test_launcher_warns_before_overwrite_memory_import(tmp_path):
