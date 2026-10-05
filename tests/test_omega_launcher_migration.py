@@ -39,7 +39,7 @@ if args[:2] == ["volume", "create"]:
     print(args[2])
     sys.exit(0)
 if args[:2] == ["volume", "rm"]:
-    if not volume(args[2]).is_dir():
+    if os.environ.get("FAKE_DOCKER_FAIL_VOLUME_RM") or not volume(args[2]).is_dir():
         sys.exit(1)
     shutil.rmtree(volume(args[2]))
     sys.exit(0)
@@ -75,6 +75,8 @@ if args[:1] == ["run"]:
             break
     command = args[index + 1:]
     sources = set(mounts.values())
+    if os.environ.get("FAKE_DOCKER_FAIL_MARKER_CHECK") and "echo migrated" in " ".join(command):
+        sys.exit(1)
     if os.environ.get("FAKE_DOCKER_FAIL_COPY") and {"omegaclaw-memory", "omega-memory"} <= sources:
         sys.exit(1)
     for target, source in mounts.items():
@@ -149,7 +151,7 @@ def _snapshot(directory):
     }
 
 
-def _launcher(root, *arguments, fail_copy=False, fail_cp=False):
+def _launcher(root, *arguments, fail_copy=False, fail_cp=False, fail_volume_rm=False, fail_marker_check=False):
     environment = os.environ.copy()
     environment["PATH"] = f"{root.parent / 'bin'}{os.pathsep}{environment['PATH']}"
     environment["FAKE_DOCKER_ROOT"] = str(root)
@@ -158,6 +160,10 @@ def _launcher(root, *arguments, fail_copy=False, fail_cp=False):
         environment["FAKE_DOCKER_FAIL_COPY"] = "1"
     if fail_cp:
         environment["FAKE_DOCKER_CP_FAILS"] = "1"
+    if fail_volume_rm:
+        environment["FAKE_DOCKER_FAIL_VOLUME_RM"] = "1"
+    if fail_marker_check:
+        environment["FAKE_DOCKER_FAIL_MARKER_CHECK"] = "1"
     return subprocess.run(
         [str(LAUNCHER), *arguments],
         cwd=REPO_ROOT,
@@ -381,3 +387,30 @@ def test_start_marker_stays_out_of_new_volume(docker_root):
 
     assert result.returncode == 0, result.stderr
     assert not (docker_root / "volumes" / "omega-memory" / ".migration-started").exists()
+
+
+def test_copy_is_redone_after_new_volume_could_not_be_removed(docker_root):
+    old = _install_omegaclaw(docker_root, running=True)
+
+    failed = _launcher(docker_root, "start", "-d", IMAGE, fail_copy=True, fail_volume_rm=True)
+
+    assert failed.returncode != 0
+    assert (old / ".migration-started").exists()
+    assert not _started_agent(docker_root)
+
+    result = _launcher(docker_root, "start", "-d", IMAGE)
+
+    assert result.returncode == 0, result.stderr
+    assert _read(docker_root / "volumes" / "omega-memory" / "history.metta") == "(old history)\n"
+    assert _started_agent(docker_root)
+
+
+def test_start_stops_when_markers_cannot_be_read(docker_root):
+    _, new = _interrupted_migration(docker_root, image_files=True)
+    before = _snapshot(new)
+
+    result = _launcher(docker_root, "start", "-d", IMAGE, fail_marker_check=True)
+
+    assert result.returncode != 0
+    assert not _started_agent(docker_root)
+    assert _snapshot(new) == before
