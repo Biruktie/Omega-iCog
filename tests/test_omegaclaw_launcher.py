@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import shutil
 import shlex
@@ -8,12 +9,24 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
-from scripts import memory_transfer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "scripts" / "omega"
 CONTAINER_TEST_IMAGE = os.environ.get("OMEGA_LAUNCHER_TEST_IMAGE", "")
+
+
+def _load_memory_transfer_module():
+    spec = importlib.util.spec_from_file_location(
+        "memory_transfer_under_test", REPO_ROOT / "scripts" / "memory_transfer.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+memory_transfer = _load_memory_transfer_module()
 
 
 def _load_installer_namespace():
