@@ -338,3 +338,46 @@ def test_image_without_omega_memory_layout_aborts(docker_root):
     assert _container_state(docker_root, "omegaclaw") == "running"
     assert _snapshot(old) == before
     assert not _started_agent(docker_root)
+
+
+def _interrupted_migration(root, image_files):
+    old = _install_omegaclaw(root, running=False)
+    (old / ".migration-started").write_text("")
+    new = root / "volumes" / "omega-memory"
+    new.mkdir()
+    if image_files:
+        shutil.copytree(root / "image-memory", new, dirs_exist_ok=True)
+    return old, new
+
+
+def test_interrupted_copy_is_redone(docker_root):
+    old, new = _interrupted_migration(docker_root, image_files=True)
+
+    result = _launcher(docker_root, "start", "-d", IMAGE)
+
+    assert result.returncode == 0, result.stderr
+    assert _read(new / "history.metta") == "(old history)\n"
+    assert _read(new / "chroma_db" / "chroma.sqlite3") == "old long-term memory"
+    assert _read(new / "prompt.txt") == "omega prompt\n"
+    assert (old / ".migrated-to-omega").exists()
+    assert _started_agent(docker_root)
+
+
+def test_run_interrupted_before_the_image_files_is_redone(docker_root):
+    old, new = _interrupted_migration(docker_root, image_files=False)
+
+    result = _launcher(docker_root, "start", "-d", IMAGE)
+
+    assert result.returncode == 0, result.stderr
+    assert _read(new / "history.metta") == "(old history)\n"
+    assert _read(new / "prompt.txt") == "omega prompt\n"
+    assert _started_agent(docker_root)
+
+
+def test_start_marker_stays_out_of_new_volume(docker_root):
+    _install_omegaclaw(docker_root)
+
+    result = _launcher(docker_root, "start", "-d", IMAGE)
+
+    assert result.returncode == 0, result.stderr
+    assert not (docker_root / "volumes" / "omega-memory" / ".migration-started").exists()
