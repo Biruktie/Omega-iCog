@@ -320,6 +320,11 @@ def _choose_memory_transfer():
             validation_error = f"{exc} for --memory-transfer-dir: {path}"
         if validation_error:
             print(validation_error, file=sys.stderr)
+            print(
+                "Prepare the directory and try again, or answer n at the next prompt "
+                "to continue without memory transfer.",
+                file=sys.stderr,
+            )
             continue
 
         while True:
@@ -797,6 +802,10 @@ start() {
             echo "--memory-transfer-dir must be writable by container user 65534 with group ${memory_transfer_gid}" >&2
             return 1
         fi
+    fi
+
+    if [[ -n "${memory_import_file}" && "${memory_import_mode}" == "overwrite" ]]; then
+        echo "WARNING: --memory-mode overwrite will replace the selected current memory components with the archive contents." >&2
     fi
 
     if [[ "${memory_export_enabled}" == "1" ]]; then

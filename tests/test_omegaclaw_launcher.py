@@ -58,14 +58,6 @@ def _stub_docker_environment(tmp_path: Path, transfer_gid: int | None = None) ->
         "if [ \"${1##*/}\" = \"memory_transfer.py\" ]; then\n"
         "  exit 0\n"
         "fi\n"
-        "if [ \"$1\" = \"-c\" ]; then\n"
-        f"  echo '{os.geteuid()} {os.geteuid()} {transfer_gid} 1528'\n"
-        "  exit 0\n"
-        "fi\n"
-        "if [ \"$1\" = \"-\" ]; then\n"
-        "  if grep -qx '    else:'; then exit 1; fi\n"
-        "  exit 2\n"
-        "fi\n"
         f"exec {shlex.quote(sys.executable)} \"$@\"\n",
         encoding="utf-8",
     )
@@ -132,7 +124,7 @@ def test_installer_records_private_group_for_existing_transfer_directory(tmp_pat
     assert memory_export_enabled == "0"
 
 
-def test_installer_rejects_unprepared_transfer_directory_before_export_prompt(tmp_path, monkeypatch):
+def test_installer_explains_how_to_skip_unprepared_transfer_directory(tmp_path, monkeypatch, capsys):
     transfer_dir = tmp_path / "memory-transfer"
     transfer_dir.mkdir()
     group_id = transfer_dir.stat().st_gid
@@ -150,6 +142,7 @@ def test_installer_rejects_unprepared_transfer_directory_before_export_prompt(tm
         installer["_choose_memory_transfer"]()
 
     assert "Enable memory export for this instance? [y/N]: " not in prompts
+    assert "answer n at the next prompt to continue without memory transfer" in capsys.readouterr().err
 
 
 def test_memory_transfer_validator_accepts_group_protected_directory(tmp_path, monkeypatch):
@@ -173,6 +166,16 @@ def test_memory_transfer_validator_accepts_group_protected_directory(tmp_path, m
     ) is None
 
 
+def test_memory_transfer_validator_rejects_non_linux_hosts(tmp_path, monkeypatch):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    monkeypatch.setattr(memory_transfer.platform, "system", lambda: "Darwin")
+
+    assert memory_transfer.validate_memory_transfer_dir(
+        str(transfer_dir), str(transfer_dir.stat().st_gid)
+    ) == "--memory-transfer-dir is supported only on Linux hosts"
+
+
 def test_launcher_uses_private_group_for_preflight_and_entrypoint(tmp_path):
     transfer_dir = tmp_path / "memory-transfer"
     transfer_dir.mkdir()
@@ -184,6 +187,20 @@ def test_launcher_uses_private_group_for_preflight_and_entrypoint(tmp_path):
     group_id = transfer_dir.stat().st_gid
     assert f"<--user> <65534:65534> <--group-add> <{group_id}>" in result.stdout
     assert f"<-e> <MEMORY_TRANSFER_GID={group_id}>" in result.stdout
+
+
+def test_launcher_warns_before_overwrite_memory_import(tmp_path):
+    result = _run_launcher(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "WARNING: --memory-mode overwrite will replace the selected current memory components" in result.stderr
+
+
+def test_launcher_does_not_warn_for_append_memory_import(tmp_path):
+    result = _run_launcher(tmp_path, "--memory-mode", "append")
+
+    assert result.returncode == 0, result.stderr
+    assert "WARNING:" not in result.stderr
 
 
 def test_entrypoint_resolves_transfer_gid_to_a_supplementary_group_name():
