@@ -14,8 +14,9 @@ export paths.
 
 Memory transfer is supported on Linux hosts only. Create a dedicated group, add
 the operator to it, and prepare an operator-owned directory with setgid and
-owner/group-only access. Start a new login session after changing group
-membership, before starting Omega.
+owner/group-only access. Do not use GID `0` (`root`) as the transfer group.
+Start a new login session after changing group membership, before starting
+Omega.
 
 ```sh
 sudo groupadd omega-transfer

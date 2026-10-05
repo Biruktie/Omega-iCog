@@ -34,12 +34,13 @@ def validate_memory_transfer_dir(path, group_id):
         return "--memory-transfer-dir is supported only on Linux hosts"
     if not os.path.isabs(path):
         return f"--memory-transfer-dir must be an absolute path: {path}"
+    path = os.path.normpath(path)
     if os.path.islink(path):
         return f"--memory-transfer-dir must not be a symbolic link: {path}"
     if not os.path.isdir(path):
         return f"--memory-transfer-dir must be a directory: {path}"
-    if not group_id.isdecimal():
-        return "--memory-transfer-gid must be a numeric private group ID"
+    if not group_id.isdecimal() or int(group_id) == 0:
+        return "--memory-transfer-gid must be a non-zero numeric private group ID"
 
     try:
         directory_stat = os.stat(path)
@@ -394,9 +395,9 @@ def _choose_memory_transfer():
             group_id = input("Private host group ID for memory archives: ").strip()
             if group_id == "q":
                 sys.exit(1)
-            if group_id.isdecimal():
+            if group_id.isdecimal() and int(group_id) != 0:
                 break
-            print("Enter a numeric group ID or q to exit.", file=sys.stderr)
+            print("Enter a non-zero numeric group ID or q to exit.", file=sys.stderr)
 
         try:
             validation_error = validate_memory_transfer_dir(path, group_id)
@@ -407,6 +408,11 @@ def _choose_memory_transfer():
             print(
                 "Prepare the directory and try again, or answer n at the next prompt "
                 "to continue without memory transfer.",
+                file=sys.stderr,
+            )
+            print(
+                "Setup instructions: https://github.com/singnet/Omega/blob/main/"
+                "docs/reference-memory-portability.md",
                 file=sys.stderr,
             )
             continue

@@ -39,11 +39,12 @@ export EMBEDDING_PROVIDER EMBEDDING_MODEL OPENAIAPI_URL MM_URL OPENCLAW_URL
 
 agent_su=(su --group nogroup nobody)
 if [[ -n "${MEMORY_TRANSFER_GID:-}" ]]; then
-  if [[ ! "${MEMORY_TRANSFER_GID}" =~ ^[0-9]+$ ]]; then
-    echo "MEMORY_TRANSFER_GID must be numeric" >&2
+  if [[ ! "${MEMORY_TRANSFER_GID}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "MEMORY_TRANSFER_GID must be a non-zero numeric private group ID" >&2
     exit 1
   fi
-  memory_transfer_group="$(getent group "${MEMORY_TRANSFER_GID}" | cut -d: -f1)"
+  group_record="$(getent group "${MEMORY_TRANSFER_GID}" 2>/dev/null || true)"
+  memory_transfer_group="${group_record%%:*}"
   if [[ -z "${memory_transfer_group}" ]]; then
     memory_transfer_group="omega-transfer-${MEMORY_TRANSFER_GID}"
     if ! groupadd --gid "${MEMORY_TRANSFER_GID}" "${memory_transfer_group}"; then

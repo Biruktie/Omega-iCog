@@ -102,6 +102,27 @@ def _run_launcher(
     )
 
 
+def _run_runtime_validator(tmp_path: Path, transfer_dir: str, transfer_gid: int) -> subprocess.CompletedProcess:
+    environment = _stub_docker_environment(
+        tmp_path, transfer_gid, stub_runtime_validator=False
+    )
+    return subprocess.run(
+        [
+            str(LAUNCHER),
+            "start",
+            "--memory-transfer-dir",
+            transfer_dir,
+            "--memory-transfer-gid",
+            str(transfer_gid),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_installer_records_private_group_for_existing_transfer_directory(tmp_path, monkeypatch):
     transfer_dir = tmp_path / "memory-transfer"
     transfer_dir.mkdir()
@@ -136,7 +157,9 @@ def test_installer_explains_how_to_skip_unprepared_transfer_directory(tmp_path, 
         installer["_choose_memory_transfer"]()
 
     assert "Enable memory export for this instance? [y/N]: " not in prompts
-    assert "answer n at the next prompt to continue without memory transfer" in capsys.readouterr().err
+    error_output = capsys.readouterr().err
+    assert "answer n at the next prompt to continue without memory transfer" in error_output
+    assert "docs/reference-memory-portability.md" in error_output
 
 
 def test_installer_uses_shared_memory_transfer_validator(tmp_path, monkeypatch):
@@ -213,6 +236,34 @@ def test_launcher_executes_runtime_memory_transfer_validation(tmp_path):
     assert "--memory-transfer-dir must enable setgid" in result.stderr
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="memory transfer directories are Linux-only")
+def test_launcher_rejects_root_as_transfer_group(tmp_path):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    transfer_dir.chmod(0o2770)
+
+    result = _run_runtime_validator(tmp_path, str(transfer_dir), 0)
+
+    assert result.returncode == 1
+    assert "--memory-transfer-gid must be a non-zero numeric private group ID" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="memory transfer directories are Linux-only")
+def test_launcher_rejects_symlink_with_trailing_slash(tmp_path):
+    transfer_dir = tmp_path / "memory-transfer"
+    transfer_dir.mkdir()
+    transfer_dir.chmod(0o2770)
+    transfer_link = tmp_path / "memory-transfer-link"
+    transfer_link.symlink_to(transfer_dir, target_is_directory=True)
+
+    result = _run_runtime_validator(
+        tmp_path, f"{transfer_link}/", transfer_dir.stat().st_gid
+    )
+
+    assert result.returncode == 1
+    assert "--memory-transfer-dir must not be a symbolic link" in result.stderr
+
+
 def test_launcher_warns_before_overwrite_memory_import(tmp_path):
     result = _run_launcher(tmp_path)
 
@@ -230,9 +281,15 @@ def test_launcher_does_not_warn_for_append_memory_import(tmp_path):
 def test_entrypoint_resolves_transfer_gid_to_a_supplementary_group_name():
     entrypoint = (REPO_ROOT / "entrypoint.sh").read_text(encoding="utf-8")
 
-    assert 'getent group "${MEMORY_TRANSFER_GID}"' in entrypoint
+    assert 'getent group "${MEMORY_TRANSFER_GID}" 2>/dev/null || true' in entrypoint
     assert 'groupadd --gid "${MEMORY_TRANSFER_GID}" "${memory_transfer_group}"' in entrypoint
     assert 'su --group nogroup --supp-group "${memory_transfer_group}" nobody' in entrypoint
+
+
+def test_entrypoint_rejects_root_as_transfer_group():
+    entrypoint = (REPO_ROOT / "entrypoint.sh").read_text(encoding="utf-8")
+
+    assert '[[ ! "${MEMORY_TRANSFER_GID}" =~ ^[1-9][0-9]*$ ]]' in entrypoint
 
 
 @pytest.mark.skipif(
