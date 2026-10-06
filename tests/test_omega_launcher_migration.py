@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,7 @@ if args[:1] == ["run"]:
             source, target = args[index + 1].split(":")[:2]
             mounts[target] = source
             index += 2
-        elif option in ("--entrypoint", "--user", "-e", "--name", "--security-opt", "--tmpfs"):
+        elif option in ("--entrypoint", "--user", "--group-add", "-e", "--name", "--security-opt", "--tmpfs"):
             if option == "--entrypoint":
                 entrypoint = args[index + 1]
             index += 2
@@ -277,7 +278,18 @@ def test_memory_import_skips_migration(docker_root, tmp_path):
     _install_omegaclaw(docker_root)
     transfer = tmp_path / "transfer"
     transfer.mkdir()
+    transfer.chmod(0o2770)
     (transfer / "memory.tar.gz").touch()
+    python3 = docker_root.parent / "bin" / "python3"
+    python3.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  *omega-memory-transfer-validator*) exit 0 ;;\n"
+        "esac\n"
+        f"exec {sys.executable!s} \"$@\"\n",
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
 
     result = _launcher(
         docker_root,
@@ -286,6 +298,8 @@ def test_memory_import_skips_migration(docker_root, tmp_path):
         IMAGE,
         "--memory-transfer-dir",
         str(transfer),
+        "--memory-transfer-gid",
+        str(transfer.stat().st_gid),
         "--memory-import",
         "memory.tar.gz",
     )
