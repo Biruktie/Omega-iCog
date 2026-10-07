@@ -72,6 +72,36 @@ def compact_plain(value, limit=1200):
     return f"sha256:{digest[:16]} chars:{len(text)} excerpt:{compact}"
 
 
+def compact_frame_history(value, limit=2400):
+    """
+    Return a clean, single-line, strictly bounded frame-history summary.
+
+    Unlike compact_plain(), this function does not add a digest/header.
+    The final returned string is guaranteed to be <= limit characters.
+    """
+    text = normalize_string(value).strip()
+
+    # MeTTa repr() may give us a quoted string such as:
+    # "UserDirective: \"What is the weather?\""
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        try:
+            text = json.loads(text)
+        except Exception:
+            text = text[1:-1]
+            text = text.replace('\\"', '"').replace('\\\\', '\\')
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    limit = max(0, int(limit))
+
+    if len(text) <= limit:
+        return text
+
+    if limit <= 3:
+        return text[:limit]
+
+    return text[:limit - 3].rstrip() + "..."
+
 def make_id(prefix="id"):
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
     return f"{prefix}-{stamp}"
@@ -381,6 +411,41 @@ def _field(expr: str, field_name: str) -> Optional[str]:
     while end < len(expr) and not expr[end].isspace() and expr[end] != ")":
         end += 1
     return expr[start:end]
+
+def cfv2_format_frame_history(value, limit=2400) -> str:
+    """Format FrameEvent atoms into clean, bounded frame-history text."""
+    text = normalize_string(value).strip()
+    events = _balanced_exprs(text, "FrameEvent")
+    formatted = []
+
+    for event in events:
+        category = _unescape_repr_id(_field(event, "category") or "")
+        payload = (_field(event, "payload") or "").strip()
+
+        if payload.startswith(chr(34)) and payload.endswith(chr(34)):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = payload[1:-1]
+                payload = payload.replace(r"\\\"", chr(34)).replace(r"\\\\", "\\")
+        else:
+            payload = payload.strip()
+
+        payload = re.sub(r"\s+", " ", payload).strip()
+        if category and payload:
+            formatted.append(f"{category}: {payload}")
+        elif category:
+            formatted.append(category)
+
+    result = " | ".join(formatted)
+    limit = max(0, int(limit))
+
+    if len(result) <= limit:
+        return result
+    if limit <= 3:
+        return result[:limit]
+    return result[:limit - 3].rstrip() + "..."
+
 
 def cfv2_refs_completed_after(index_repr, date_prefix) -> str:
     """Return completed FrameRefs whose completed-timestamp starts with or compares after date_prefix.

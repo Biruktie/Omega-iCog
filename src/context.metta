@@ -54,6 +54,12 @@
          (repr $value)
          $limit)))
 
+(= (cfv2-compact-frame-history $value)
+   (py-call
+      (helper.compact_frame_history
+         (repr $value)
+         (cfv2HistorySummaryLimit))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Defaults
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -271,6 +277,9 @@
       ;; Relational states used in frame composition
       (change-state! &cfv2-relational-space ())
 
+      ;; Structured history events
+      (change-state! &cfv2-frame-event-space ())
+
       ;; Hot focused frame cache.
       CONTEXT-FRAMES-V2-INITIALIZED))
 
@@ -314,6 +323,88 @@
         (== (cfv2-check-frame-id $frame $frameID) False))
         (change-state! $space (append $newSpaceContent ($newFrame)))))
 
+(= (cfv2-make-frame-event $frameID $category $payload $timestamp)
+   (FrameEvent
+      (frameID $frameID)
+      (category $category)
+      (payload $payload)
+      (timestamp $timestamp)
+   ))
+
+(= (cfv2-add-frame-event $event)
+   (change-state!
+      &cfv2-frame-event-space
+      (append
+         (get-state &cfv2-frame-event-space)
+         ($event))))
+
+
+(= (cfv2-record-frame-event $category $payload)
+   (if (== (get-state &cfv2-current-frame-id) ())
+       NO-CURRENT-FRAME-FOR-EVENT
+       (let* (($frameID (get-state &cfv2-current-frame-id))
+              ($timestamp (cfv2-now))
+              ($event
+                 (cfv2-make-frame-event
+                    $frameID
+                    $category
+                    $payload
+                    $timestamp)))
+          (cfv2-add-frame-event $event))))
+
+(= (cfv2-record-frame-event-for-frame $frameID $category $payload)
+   (let* (
+      ($timestamp (cfv2-now))
+      ($event
+         (cfv2-make-frame-event
+            $frameID
+            $category
+            $payload
+            $timestamp)))
+      (cfv2-add-frame-event $event)))
+
+(= (cfv2-check-frame-event
+      (FrameEvent
+         (frameID $eventFrameID)
+         (category $eventCategory)
+         (payload $payload)
+         (timestamp $timestamp))
+      $frameID
+      $category)
+   (if
+      (and
+         (== $eventFrameID $frameID)
+         (== $eventCategory $category))
+      True
+      False))
+
+(= (cfv2-get-frame-events $frameID $category)
+   (filter-atom
+      (get-state &cfv2-frame-event-space)
+      $event
+      (== (cfv2-check-frame-event $event $frameID $category) True)))
+
+
+(= (cfv2-build-frame-history-text $events)
+   (py-call
+      (helper.cfv2_format_frame_history
+         (repr $events)
+         (cfv2HistorySummaryLimit))))
+
+(= (cfv2-get-all-frame-events $frameID)
+   (append
+      (cfv2-get-frame-events $frameID UserDirective)
+      (append
+         (cfv2-get-frame-events $frameID CommandBatch)
+         (append
+            (cfv2-get-frame-events $frameID Result)
+            (cfv2-get-frame-events $frameID Milestone)))))
+
+(= (cfv2-compact-frame-events $frameID)
+   (let $events (cfv2-get-all-frame-events $frameID)
+      (let $historyText (cfv2-build-frame-history-text $events)
+         (cfv2-compact-frame-history $historyText))))
+
 ;; TODO: change the way current frame is snapshotted.
 ;; Update: The snapshot function has changed to take a frame as an argument. The current frame is now snapshotted by passing a frame.
 (= (cfv2-snapshot-current-frame $space $frame)
@@ -356,32 +447,26 @@
 (= (cfv2-touch-current-frame)
    (change-state! &cfv2-current-updated-at (cfv2-now)))
 
-;; TODO: limit the size of the history summary to a certain number of characters or tokens
-;; take in the frame then deconstruct the frame then change the state of that frame.
-;; Update: Since the current frame cache has been set the history summary can be updated directly in the state without needing to deconstruct the frame.
-(= (cfv2-update-current-history-summary $kind $summary)
-    (let $new-summary
-        (swrite ((get-state &cfv2-current-history-summary) | $kind : $summary))
-        (change-state! &cfv2-current-history-summary $new-summary)))
 
-;; TODO: The snapshot function has changed to take a frame as an argument.
+
 (= (cfv2-record-frame-note $kind $payload)
    (if (== (get-state &cfv2-current-frame-id) ())
        NO-CURRENT-FRAME-FOR-COMMAND-BATCH
-       (let $summary (cfv2-compact-plain $payload)
+       (let $summary  $payload
          (progn
-            (cfv2-update-current-history-summary $kind $summary)
+            (cfv2-record-frame-event Milestone $summary)
             (cfv2-touch-current-frame)
             (FRAME-NOTE-RECORDED)))))
 
 (= (cfv2-record-command-batch $commands $results)
    (if (== (get-state &cfv2-current-frame-id) ())
        NO-CURRENT-FRAME-FOR-COMMAND-BATCH
-      (let $resultsSummary (cfv2-compact-plain (append $commands $results))
-         (progn
-            ; (cfv2-update-current-history-summary CommandBatch $resultsSummary)
-            (cfv2-touch-current-frame)
-            (HISTORY-SUMMARY-UPDATED)))))
+       (let $resultsSummary
+          (append $commands $results)
+          (progn
+             (cfv2-record-frame-event CommandBatch $resultsSummary)
+             (cfv2-touch-current-frame)
+             (HISTORY-SUMMARY-UPDATED)))))
 
 (= (cfv2-add-hypothesis $id $hypothesis)
    (progn
@@ -467,6 +552,7 @@
          )
       
       (progn
+         (cfv2-record-frame-event-for-frame $frameID UserDirective $description)
          (cfv2-snapshot-current-frame Active $frame)
          ; (log DEBUG "context" (CREATING-FRAME $frameID FROM $source WITH-MODE $mode))
          (cfv2-index-current-frame $frameID Active)
@@ -492,7 +578,7 @@
    (if (== (get-state &cfv2-current-frame-id) ())
       NO-CURRENT-FRAME-FOR-COMMAND-BATCH
       (progn
-         (cfv2-update-current-history-summary UserMessageForCurrentFrame (cfv2-compact-plain $msg))
+         (cfv2-record-frame-event UserDirective (cfv2-compact-plain $msg))
          (cfv2-touch-current-frame)
          MESSAGE-RECORDED-FOR-CURRENT-FRAME
          )))
@@ -602,7 +688,7 @@
                (change-state! &cfv2-current-frame-mode $mode)
                (change-state! &cfv2-current-hypotheses $hypotheses)
                (change-state! &cfv2-current-method $methods)
-               (change-state! &cfv2-current-history-summary $historySummary)
+               (change-state! &cfv2-current-history-summary (cfv2-compact-frame-events $frameIDAtom))
                (change-state! &cfv2-current-modules $modules)
                (change-state! &cfv2-current-budget $budget)
                (change-state! &cfv2-current-constraints $constraint)
@@ -729,7 +815,7 @@
       (change-state! &cfv2-current-status Completed)
       (change-state! &cfv2-current-completed-timestamp (cfv2-now))
       (change-state! &cfv2-current-completed-summary $summary)
-      (cfv2-update-current-history-summary FrameCompleted $summary)
+      (cfv2-record-frame-event Milestone (FrameCompleted $summary))
       (cfv2-touch-current-frame)
       ; (cfv2-current-frame)
       ))
@@ -775,7 +861,7 @@
        (progn
           (change-state! &cfv2-current-hypotheses ())
           (change-state! &cfv2-current-results ())
-          (cfv2-update-current-history-summary FrameJunkCleared $summary)
+          (cfv2-record-frame-event Milestone (FrameJunkCleared $summary))
           (cfv2-touch-current-frame)
          ;  (cfv2-snapshot-current-frame Active (cfv2-current-cache-to-frame))
          ;  (cfv2-index-current-frame Active)
