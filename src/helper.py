@@ -443,8 +443,8 @@ def cfv2_format_frame_history(value, limit=2400) -> str:
     if len(result) <= limit:
         return result
     if limit <= 3:
-        return result[:limit]
-    return result[:limit - 3].rstrip() + "..."
+        return result[-limit:]
+    return "..." + result[-(limit - 3):].lstrip()
 
 
 def cfv2_refs_completed_after(index_repr, date_prefix) -> str:

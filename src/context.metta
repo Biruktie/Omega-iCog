@@ -350,7 +350,9 @@
                     $category
                     $payload
                     $timestamp)))
-          (cfv2-add-frame-event $event))))
+          (progn
+             (cfv2-add-frame-event $event)
+             (change-state! &cfv2-current-history-summary (cfv2-compact-frame-events $frameID))))))
 
 (= (cfv2-record-frame-event-for-frame $frameID $category $payload)
    (let* (
@@ -363,26 +365,22 @@
             $timestamp)))
       (cfv2-add-frame-event $event)))
 
-(= (cfv2-check-frame-event
+(= (cfv2-check-frame-event-frame
       (FrameEvent
          (frameID $eventFrameID)
          (category $eventCategory)
          (payload $payload)
          (timestamp $timestamp))
-      $frameID
-      $category)
-   (if
-      (and
-         (== $eventFrameID $frameID)
-         (== $eventCategory $category))
-      True
-      False))
+      $frameID)
+   (if (== $eventFrameID $frameID)
+       True
+       False))
 
-(= (cfv2-get-frame-events $frameID $category)
+(= (cfv2-get-all-frame-events $frameID)
    (filter-atom
       (get-state &cfv2-frame-event-space)
       $event
-      (== (cfv2-check-frame-event $event $frameID $category) True)))
+      (== (cfv2-check-frame-event-frame $event $frameID) True)))
 
 
 (= (cfv2-build-frame-history-text $events)
@@ -390,15 +388,6 @@
       (helper.cfv2_format_frame_history
          (repr $events)
          (cfv2HistorySummaryLimit))))
-
-(= (cfv2-get-all-frame-events $frameID)
-   (append
-      (cfv2-get-frame-events $frameID UserDirective)
-      (append
-         (cfv2-get-frame-events $frameID CommandBatch)
-         (append
-            (cfv2-get-frame-events $frameID Result)
-            (cfv2-get-frame-events $frameID Milestone)))))
 
 (= (cfv2-compact-frame-events $frameID)
    (let $events (cfv2-get-all-frame-events $frameID)
@@ -462,7 +451,7 @@
    (if (== (get-state &cfv2-current-frame-id) ())
        NO-CURRENT-FRAME-FOR-COMMAND-BATCH
        (let $resultsSummary
-          (append $commands $results)
+          (cfv2-compact-plain (append $commands $results))
           (progn
              (cfv2-record-frame-event CommandBatch $resultsSummary)
              (cfv2-touch-current-frame)
