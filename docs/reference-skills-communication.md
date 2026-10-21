@@ -1,4 +1,4 @@
-# Reference — Communication Skills
+grep -n "cfv2-update-current-history-summary" /PeTTa/repos/OmegaClaw-Core/src/context.metta# Reference — Communication Skills
 
 Defined in `src/channels.metta`. Dispatch depends on the `commchannel` configuration parameter (see [reference-configuration.md](./reference-configuration.md)).
 

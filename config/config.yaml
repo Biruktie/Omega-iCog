@@ -8,8 +8,8 @@ maxWakeLoops: 1
 sleepInterval: 1
 # LLM model to load overrides *_model parameters see below
 #model: 
-# LLM provider id, see the list below in the Providers section
-provider: Anthropic
+# LLM provider, see the list below in the Providers section
+provider: OpenRouter
 # Output cap passed to the provider
 maxOutputToken: 6000
 # Reasoning-effort hint passed to the provider
@@ -47,7 +47,7 @@ memoryExportEnabled: false
 # Policy
 
 # Path to the security profile written using [OpenShell YAML](https://docs.nvidia.com/openshell/reference/policy-schema#filesystem-policy). See [./profile/policy.yaml](./profile/policy.yaml) as an example. Empty value disables restrictions.
-securityPolicyPath: "./repos/Omega/profile/policy.yaml"
+securityPolicyPath: ""
 # (internal) URL to the Nginx proxy isolating API keys from agent
 #GATEWAY_URL:
 
@@ -55,7 +55,7 @@ securityPolicyPath: "./repos/Omega/profile/policy.yaml"
 
 # Identifier of the communication channel for agent to use
 # see the list below
-commchannel: irc
+commchannel: telegram
 
 # IRC
 # Enabled with commchannel: irc

@@ -480,6 +480,7 @@ def start_telegram(chat_id="", allowed_chat_ids="", poll_timeout=20):
         _bot_token = "proxy"
         _api_base = f"{proxy}/telegram"
     else:
+        _load_local_env()
         _bot_token = os.environ.get("TG_BOT_TOKEN", "").strip()
         if not _bot_token:
             raise ValueError("TG_BOT_TOKEN is required")
