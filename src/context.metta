@@ -322,6 +322,166 @@
       (change-state! $subframespace
          (append $currentSpace ($subFrame)))))
 
+;; Check whether a goal belongs to the requested frame.
+(= (cfv2-goal-belongs-to-frame
+      (Goal
+         (goalID $goalID)
+         (frameID $recordFrameID)
+         (sub-frameID $subFrameID)
+         (description $description)
+         (status $status)
+         (source $source)
+         (priority $priority)
+         (dependencies $dependencies)
+         (success-criteria $criteria)
+         (created-at $createdAt)
+         (completed-at $completedAt)
+         (completion-summary $completionSummary))
+      $frameID)
+   (== $recordFrameID $frameID))
+
+;; Support positional Goal records.
+(= (cfv2-goal-belongs-to-frame
+      (Goal
+         (goalID $goalID)
+         (frameID $recordFrameID)
+         (sub-frameID $subFrameID)
+         $description
+         $source
+         $priority
+         $deliverables
+         $status
+         $createdAt
+         $completedAt)
+      $frameID)
+   (if (== $recordFrameID $frameID) True False))
+
+;; Check whether a subframe belongs to the requested frame.
+(= (cfv2-subframe-belongs-to-frame
+      (SubFrame
+         (sub-frameID $subFrameID)
+         (frameID $recordFrameID)
+         (priority $priority)
+         (status $status)
+         (goal $goal)
+         (deliverables $deliverables)
+         (dependencies $dependencies)
+         (created-at $createdAt)
+         (completed-at $completedAt)
+         (completion-summary $completionSummary))
+      $frameID)
+   (== $recordFrameID $frameID))
+
+;; Retrieve a frame from the active or completed frame space.
+(= (cfv2-get-frame-from-any-space $frameID)
+   (let* (
+      ($activeFrame
+         (cfv2-get-frame $frameID &cfv2-active-framespace))
+      ($completedFrame
+         (cfv2-get-frame $frameID &cfv2-completed-framespace))
+   )
+      (if (== $activeFrame ())
+          $completedFrame
+          $activeFrame)))
+
+(= (cfv2-get-goal-namespace
+      (Frame (frameID $id) $parent $source $priority $goalSpace
+             $status $mode $hypotheses $method $history
+             $modules $budget $constraints $deliverables
+             $subFrameSpace $results $created $updated
+             $completedTimestamp $completedSummary))
+   $goalSpace)
+
+;; Check whether a goal belongs to the requested frame.
+(= (cfv2-goal-belongs-to-frame
+      (Goal
+         (goalID $goalID)
+         (frameID $recordFrameID)
+         (sub-frameID $subFrameID)
+         (description $description)
+         (status $status)
+         (source $source)
+         (priority $priority)
+         (dependencies $dependencies)
+         (success-criteria $criteria)
+         (created-at $createdAt)
+         (completed-at $completedAt)
+         (completion-summary $completionSummary))
+      $frameID)
+   (if (== $recordFrameID $frameID) True False))
+
+;; Check whether a subframe belongs to the requested frame.
+(= (cfv2-subframe-belongs-to-frame
+      (SubFrame
+         (sub-frameID $subFrameID)
+         (frameID $recordFrameID)
+         (priority $priority)
+         (status $status)
+         (goal $goal)
+         (deliverables $deliverables)
+         (dependencies $dependencies)
+         (created-at $createdAt)
+         (completed-at $completedAt)
+         (completion-summary $completionSummary))
+      $frameID)
+   (if (== $recordFrameID $frameID) True False))
+
+;; Retrieve only goals belonging to the requested frame.
+(= (cfv2-get-frame-goals $frameID)
+   (let*
+      (
+         ($frame (cfv2-get-frame $frameID &cfv2-active-framespace))
+         ($goalSpace (cfv2-get-goal-namespace $frame))
+      )
+      (filter-atom
+         (get-state $goalSpace)
+         $goal
+         (== (cfv2-goal-belongs-to-frame $goal $frameID) True))))
+
+;; Retrieve only subframes belonging to the requested frame.
+(= (cfv2-get-frame-subframes $frameID)
+   (let*
+      (
+         ($frame (cfv2-get-frame-from-any-space $frameID))
+         ($subFrameSpace (cfv2-get-subframe-namespace $frame))
+      )
+      (filter-atom
+         (get-state $subFrameSpace)
+         $subFrame
+         (== (cfv2-subframe-belongs-to-frame $subFrame $frameID) True))))
+
+;; Find goals with a mismatched frameID.
+(= (cfv2-get-mismatched-frame-goals $frameID)
+   (let*
+      (
+         ($frame (cfv2-get-frame $frameID &cfv2-active-framespace))
+         ($goalSpace (cfv2-get-goal-namespace $frame))
+      )
+      (filter-atom
+         (get-state $goalSpace)
+         $goal
+         (== (cfv2-goal-belongs-to-frame $goal $frameID) False))))
+
+;; Find subframes with a mismatched frameID.
+(= (cfv2-get-mismatched-frame-subframes $frameID)
+   (let*
+      (
+         ($frame (cfv2-get-frame-from-any-space $frameID))
+         ($subFrameSpace (cfv2-get-subframe-namespace $frame))
+      )
+      (filter-atom
+         (get-state $subFrameSpace)
+         $subFrame
+         (== (cfv2-subframe-belongs-to-frame $subFrame $frameID) False))))
+
+(= (cfv2-get-subframe-namespace
+      (Frame (frameID $id) $parent $source $priority $goalSpace
+             $status $mode $hypotheses $method $history
+             $modules $budget $constraints $deliverables
+             $subFrameSpace $results $created $updated
+             $completedTimestamp $completedSummary))
+   $subFrameSpace)
+
 (= (cfv2-add-and-remove $frameID $newFrame $space)
    (let $newSpaceContent (filter-atom (get-state $space) $frame
         (== (cfv2-check-frame-id $frame $frameID) False))

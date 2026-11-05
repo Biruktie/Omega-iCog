@@ -4,10 +4,21 @@ import hashlib
 import json
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any
+
+OMEGA_ROOT = Path(__file__).resolve().parent.parent
+
+if str(OMEGA_ROOT) not in sys.path:
+    sys.path.append(str(OMEGA_ROOT))
+
+if str(OMEGA_ROOT / "providers") not in sys.path:
+    sys.path.append(str(OMEGA_ROOT / "providers"))
 
 import chromadb
 from openai import OpenAI
+
 import lib_llm_ext
 from config import config_get_by_key
 
