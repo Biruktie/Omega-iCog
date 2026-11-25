@@ -348,6 +348,8 @@ def generate_and_send(prompt):
 # Uses edge-tts (free, no API key). Voice is configurable via EDGE_TTS_VOICE.
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
+DEFAULT_TTS_PROVIDER = "edge"
+DEFAULT_TTS_FALLBACK_PROVIDER = "google"
 RECORDING_REFRESH_SECONDS = 4
 MAX_VOICE_REQUESTS = 100
 _voice_requests = OrderedDict()
@@ -457,25 +459,78 @@ def _tts_allowed():
 
 
 def _synthesise_speech(text, voice):
-    """Synthesise `text` via edge-tts and return raw MP3 bytes, or None on failure."""
-    try:
+    """Synthesise `text` as MP3 bytes with provider fallback, or None on failure."""
+    def _synthesise_edge(chunk_text, chunk_voice):
         import asyncio, io, edge_tts
+
         async def _run():
             with io.BytesIO() as buf:
-                async for chunk in edge_tts.Communicate(text, voice=voice).stream():
+                async for chunk in edge_tts.Communicate(chunk_text, voice=chunk_voice).stream():
                     if chunk["type"] == "audio":
                         buf.write(chunk["data"])
                 return buf.getvalue()
+
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(asyncio.run, _run()).result()
         except RuntimeError:
             return asyncio.run(_run())
+
+    def _google_lang_from_voice(chunk_voice):
+        if not isinstance(chunk_voice, str) or not chunk_voice.strip():
+            return "en"
+        parts = chunk_voice.split("-")
+        if parts and len(parts[0]) == 2:
+            return parts[0].lower()
+        return "en"
+
+    def _synthesise_google(chunk_text, chunk_voice):
+        import io
+        from gtts import gTTS
+
+        language = _google_lang_from_voice(chunk_voice)
+        with io.BytesIO() as buf:
+            try:
+                gTTS(text=chunk_text, lang=language).write_to_fp(buf)
+            except ValueError:
+                # Fall back to English when the detected language is unsupported.
+                buf = io.BytesIO()
+                gTTS(text=chunk_text, lang="en").write_to_fp(buf)
+            return buf.getvalue()
+
+    try:
+        from config import config_get_by_key
+
+        provider = (config_get_by_key("TTS_PROVIDER", DEFAULT_TTS_PROVIDER) or "").strip().lower()
+        fallback = (config_get_by_key("TTS_FALLBACK_PROVIDER", DEFAULT_TTS_FALLBACK_PROVIDER) or "").strip().lower()
+
+        synthesizers = {
+            "edge": _synthesise_edge,
+            "google": _synthesise_google,
+        }
+        order = [provider] if provider else []
+        if fallback and fallback != provider:
+            order.append(fallback)
+        if not order:
+            order = [DEFAULT_TTS_PROVIDER, DEFAULT_TTS_FALLBACK_PROVIDER]
+
+        for name in order:
+            synthesizer = synthesizers.get(name)
+            if synthesizer is None:
+                logger.warning("Unknown TTS provider %r; skipping", name)
+                continue
+            try:
+                audio = synthesizer(text, voice)
+            except Exception as exc:
+                logger.warning("TTS provider %s failed: %s", name, exc)
+                continue
+            if audio:
+                return audio
     except Exception as e:
         logger.error(f"TTS synthesis failed: {e}")
-        return None
+    return None
 
 
 def speak(text=""):

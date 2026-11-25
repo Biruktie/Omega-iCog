@@ -348,6 +348,61 @@ def test_synthesise_speech_uses_edge_tts():
             sys.modules["edge_tts"] = original
 
 
+def test_synthesise_speech_falls_back_to_google_tts():
+    class BoomCommunicate:
+        def __init__(self, text, voice):
+            pass
+
+        def stream(self):
+            async def boom():
+                raise RuntimeError("edge down")
+                yield None
+
+            return boom()
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            assert text == "hello"
+            assert lang == "en"
+
+        def write_to_fp(self, buf):
+            buf.write(b"google-mp3")
+
+    fake_edge_tts = types.ModuleType("edge_tts")
+    fake_edge_tts.Communicate = BoomCommunicate
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
+
+    original_edge = sys.modules.get("edge_tts")
+    original_gtts = sys.modules.get("gtts")
+    sys.modules["edge_tts"] = fake_edge_tts
+    sys.modules["gtts"] = fake_gtts
+
+    orig_cfg = sys.modules.get("config")
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: {
+        "TTS_PROVIDER": "edge",
+        "TTS_FALLBACK_PROVIDER": "google",
+    }.get(key, default)
+    sys.modules["config"] = fake_config
+    try:
+        result = mh._synthesise_speech("hello", "en-US-AriaNeural")
+        assert result == b"google-mp3", result
+    finally:
+        if original_edge is None:
+            del sys.modules["edge_tts"]
+        else:
+            sys.modules["edge_tts"] = original_edge
+        if original_gtts is None:
+            del sys.modules["gtts"]
+        else:
+            sys.modules["gtts"] = original_gtts
+        if orig_cfg is None:
+            del sys.modules["config"]
+        else:
+            sys.modules["config"] = orig_cfg
+
+
 if __name__ == "__main__":
     test_no_image_returns_marker()
     test_describe_memoizes_per_turn()
@@ -369,4 +424,5 @@ if __name__ == "__main__":
     test_speak_synthesis_failure()
     test_speak_success()
     test_synthesise_speech_uses_edge_tts()
+    test_synthesise_speech_falls_back_to_google_tts()
     print("all media_handler tests passed")
