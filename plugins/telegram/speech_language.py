@@ -90,7 +90,10 @@ def detect_language(text):
     letters = [char.lower() for char in text if char.isalpha()]
     if len(letters) < 5 or len(set(letters)) < 3:
         return None
-    scores = _detector().compute_language_confidence_values(text)
+    try:
+        scores = _detector().compute_language_confidence_values(text)
+    except (ImportError, ModuleNotFoundError):
+        return None
     if _script_is_main(text, r"[\u0400-\u052f]+") and (
             not scores or scores[0].value < .35):
         scores = _cyrillic_detector().compute_language_confidence_values(text)
@@ -125,7 +128,10 @@ def _cyrillic_language(text):
         return "uk"
     if re.search(r"[ыэёъЫЭЁЪ]", text):
         return "ru"
-    scores = _cyrillic_detector().compute_language_confidence_values(text)
+    try:
+        scores = _cyrillic_detector().compute_language_confidence_values(text)
+    except (ImportError, ModuleNotFoundError):
+        return "ru"
     if scores and scores[0].value >= .60:
         return scores[0].language.iso_code_639_1.name.lower()
     return "ru"
@@ -157,20 +163,41 @@ def _segments(text):
     return segments
 
 
-@lru_cache(maxsize=1)
+_available_voices_cache = None
+
+
 def available_voices():
-    """Cache successful catalogue requests; a failed request can be retried."""
-    import edge_tts
-
-    async def fetch():
-        return await asyncio.wait_for(edge_tts.list_voices(), timeout=10)
-
+    """Load Edge's voice catalogue, caching successes only for retries after outages."""
+    global _available_voices_cache
+    if _available_voices_cache:
+        return _available_voices_cache
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(fetch())
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, fetch()).result()
+        import edge_tts
+
+        async def fetch():
+            return await asyncio.wait_for(edge_tts.list_voices(), timeout=10)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            voices = asyncio.run(fetch())
+        else:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                voices = pool.submit(asyncio.run, fetch()).result()
+        if voices:
+            _available_voices_cache = voices
+        return voices or []
+    except Exception as exc:
+        logger.warning("Could not load Edge TTS voice catalogue: %s", exc)
+        return []
+
+
+def _clear_available_voices_cache():
+    global _available_voices_cache
+    _available_voices_cache = None
+
+
+available_voices.cache_clear = _clear_available_voices_cache
 
 
 def select_voice(language, configured_voice):
@@ -179,10 +206,14 @@ def select_voice(language, configured_voice):
         return configured_voice
     language = _language(language)
     voices = available_voices()
+    if not voices:
+        logger.warning("Edge TTS voice catalogue unavailable; using configured voice %s", configured_voice)
+        return configured_voice
     gender = next((voice.get("Gender") for voice in voices
                    if voice.get("ShortName") == configured_voice), None)
     if gender not in ("Female", "Male"):
-        raise ValueError(f"Cannot determine gender of configured voice {configured_voice}")
+        logger.warning("Cannot determine gender of configured voice %r; using %s", configured_voice, DEFAULT_VOICE)
+        return DEFAULT_VOICE
     candidates = sorted(
         voice["ShortName"] for voice in voices
         if _language(voice.get("Locale", "")) == _language(language)
@@ -205,7 +236,11 @@ def select_voice(language, configured_voice):
 @lru_cache(maxsize=64)
 def validated_voice(configured_voice):
     """Cache successful validation only; catalogue outages are not typos."""
-    if any(v.get("ShortName") == configured_voice for v in available_voices()):
+    voices = available_voices()
+    if not voices:
+        logger.warning("Edge TTS voice catalogue unavailable; retaining configured voice %r", configured_voice)
+        return configured_voice
+    if any(v.get("ShortName") == configured_voice for v in voices):
         return configured_voice
     logger.warning("Unknown configured voice %r; using %s", configured_voice, DEFAULT_VOICE)
     return DEFAULT_VOICE
@@ -234,3 +269,10 @@ def speech_parts(text, configured_voice=DEFAULT_VOICE):
                 logger.info("Speech segment language=%s voice=%s", segment_language, segment_voice)
         parts.extend((piece, segment_voice) for piece in split_for_telegram(segment))
     return parts
+
+
+def _clear_available_voices_cache():
+    global _available_voices_cache
+    _available_voices_cache = None
+
+available_voices.cache_clear = _clear_available_voices_cache

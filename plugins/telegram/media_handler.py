@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from collections import OrderedDict
 from itertools import groupby
 from speech_text import prepare_speech
-from speech_language import speech_parts, speech_chunks
+from speech_language import speech_parts, speech_chunks, detect_language
 
 logger = logging.getLogger(__name__)
 
@@ -478,33 +478,49 @@ def _synthesise_speech(text, voice):
         except RuntimeError:
             return asyncio.run(_run())
 
-    def _google_lang_from_voice(chunk_voice):
+    def _google_lang_from_voice(chunk_text, chunk_voice):
+        language = detect_language(chunk_text)
+        if language:
+            if language == "no":
+                return "no"
+            if language == "he":
+                return "iw"
+            if language == "fil":
+                return "tl"
+            return language
         if not isinstance(chunk_voice, str) or not chunk_voice.strip():
             return "en"
-        parts = chunk_voice.split("-")
-        if parts and len(parts[0]) == 2:
-            return parts[0].lower()
-        return "en"
+        edge_language = chunk_voice.split("-", 1)[0].lower()
+        return {"nb": "no", "nn": "no", "he": "iw", "fil": "tl"}.get(edge_language, edge_language)
 
     def _synthesise_google(chunk_text, chunk_voice):
         import io
         from gtts import gTTS
 
-        language = _google_lang_from_voice(chunk_voice)
-        with io.BytesIO() as buf:
+        language = _google_lang_from_voice(chunk_text, chunk_voice)
+        for candidate in (language, "en"):
             try:
-                gTTS(text=chunk_text, lang=language).write_to_fp(buf)
-            except ValueError:
-                # Fall back to English when the detected language is unsupported.
-                buf = io.BytesIO()
-                gTTS(text=chunk_text, lang="en").write_to_fp(buf)
-            return buf.getvalue()
+                with io.BytesIO() as buf:
+                    gTTS(text=chunk_text, lang=candidate).write_to_fp(buf)
+                    return buf.getvalue()
+            except (ValueError, Exception):
+                continue
+        return None
 
     try:
-        from config import config_get_by_key
+        try:
+            from config import config_get_by_key
+        except Exception:
+            def config_get_by_key(key, default=None):
+                import os
+                value = os.environ.get(f"OMEGA_{key}", os.environ.get(key, ""))
+                return value if isinstance(value, str) and value else default
 
-        provider = (config_get_by_key("TTS_PROVIDER", DEFAULT_TTS_PROVIDER) or "").strip().lower()
-        fallback = (config_get_by_key("TTS_FALLBACK_PROVIDER", DEFAULT_TTS_FALLBACK_PROVIDER) or "").strip().lower()
+        provider_value = config_get_by_key("TTS_PROVIDER", DEFAULT_TTS_PROVIDER)
+        fallback_value = config_get_by_key("TTS_FALLBACK_PROVIDER", DEFAULT_TTS_FALLBACK_PROVIDER)
+
+        provider = provider_value.strip().lower() if isinstance(provider_value, str) else DEFAULT_TTS_PROVIDER
+        fallback = fallback_value.strip().lower() if isinstance(fallback_value, str) else ""
 
         synthesizers = {
             "edge": _synthesise_edge,

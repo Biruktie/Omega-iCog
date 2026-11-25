@@ -11,9 +11,9 @@ nginx_url() {
 cd /PeTTa
 
 EMBEDDING_PROVIDER="${EMBEDDING_PROVIDER:-Local}"
-OPENAIAPI_URL="http://localhost:8080/" # dummy value
-MM_URL="http://localhost:8080/" # dummy value
-OPENCLAW_URL="http://localhost:8080/" # dummy value
+OPENAIAPI_URL="http://localhost:8080/"
+MM_URL="http://localhost:8080/"
+OPENCLAW_URL="http://localhost:8080/"
 for arg in "$@"; do
   if [[ "$arg" == embeddingprovider=* ]]; then
     EMBEDDING_PROVIDER="${arg#*=}"
@@ -26,7 +26,6 @@ for arg in "$@"; do
   if [[ "$arg" == MM_URL=* ]]; then
     MM_URL=$(nginx_url "${arg#*=}")
   fi
-  # URL to redirect OpenClaw Gateway requests
   if [[ "$arg" == openclaw_url=* ]]; then
     OPENCLAW_URL=$(nginx_url "${arg#*=}")
   fi
@@ -37,14 +36,16 @@ su www-data -s /bin/sh -c "sh /opt/nginx/nginx.sh"
 
 # Optional knowledge-base import
 if [[ "${IMPORT_KB_ON_START}" == "1" ]]; then
-  su nobody -s /bin/sh -c "${OMEGA_DIR}/scripts/import_knowledge.sh"
+  su nobody -s /bin/sh -c "${OMEGACLAW_DIR}/scripts/import_knowledge.sh"
 fi
 
 # Scrub environment: only allowlisted vars survive.
 SAFE_VARS="HOME USER PATH HOSTNAME TERM LANG LC_ALL \
   PYTHONDONTWRITEBYTECODE PYTHONUNBUFFERED \
   HF_HOME SENTENCE_TRANSFORMERS_HOME HF_HUB_OFFLINE TRANSFORMERS_OFFLINE \
-  OMEGA_DIR MEMORY_DIR TEST_SERVER_IP EDGE_TTS_VOICE OMEGA_EDGE_TTS_VOICE"
+  OMEGACLAW_DIR MEMORY_DIR TEST_SERVER_IP \
+  OMEGA_TTS_PROVIDER TTS_PROVIDER \
+  OMEGA_TTS_FALLBACK_PROVIDER TTS_FALLBACK_PROVIDER"
 
 env_args=""
 for var in $SAFE_VARS; do

@@ -15,6 +15,9 @@ memory/.channel/
 
 # venv
 .venv 
+venv/
+
+debug_nginx.conf
 
 # editor backup files
 *~

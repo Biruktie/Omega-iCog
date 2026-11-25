@@ -44,6 +44,13 @@ def config_get_by_key(key, default=None):
             value = os.environ.get(name, "").strip()
             if value:
                 return _cache_config(key, value, "environment variable")
+    if key in ("TTS_PROVIDER", "TTS_FALLBACK_PROVIDER"):
+        for name in (f"OMEGA_{key}", key):
+            if name not in os.environ:
+                continue
+            value = os.environ.get(name)
+            if isinstance(value, str):
+                return _cache_config(key, value.strip(), "environment variable")
     envkey = f"OMEGA_{key}"
     if envkey in os.environ and key != "EDGE_TTS_VOICE":
         return _cache_config(key, os.environ.get(envkey), "environment variable")

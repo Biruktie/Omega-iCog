@@ -191,8 +191,7 @@ class VoiceCatalogueTests(unittest.TestCase):
     def test_failed_request_can_retry(self):
         with patch("edge_tts.list_voices", new_callable=AsyncMock,
                    side_effect=[TimeoutError("timeout"), VOICES]) as fetch:
-            with self.assertRaises(TimeoutError):
-                sl.available_voices()
+            self.assertEqual(sl.available_voices(), [])
             self.assertEqual(sl.available_voices(), VOICES)
             self.assertEqual(fetch.await_count, 2)
 

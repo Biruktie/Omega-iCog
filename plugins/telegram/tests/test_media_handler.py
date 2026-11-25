@@ -403,6 +403,88 @@ def test_synthesise_speech_falls_back_to_google_tts():
             sys.modules["config"] = orig_cfg
 
 
+def test_synthesise_speech_google_primary():
+    edge_called = {"value": False}
+
+    class UnexpectedEdge:
+        def __init__(self, text, voice):
+            edge_called["value"] = True
+
+        def stream(self):
+            async def empty():
+                yield {"type": "audio", "data": b"edge"}
+            return empty()
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            assert lang == "en"
+        def write_to_fp(self, buf):
+            buf.write(b"google-primary")
+
+    fake_edge = types.ModuleType("edge_tts")
+    fake_edge.Communicate = UnexpectedEdge
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: "google" if key == "TTS_PROVIDER" else ""
+
+    saved = {name: sys.modules.get(name) for name in ("edge_tts", "gtts", "config")}
+    sys.modules.update(edge_tts=fake_edge, gtts=fake_gtts, config=fake_config)
+    try:
+        assert mh._synthesise_speech("hello", "en-US-AriaNeural") == b"google-primary"
+        assert edge_called["value"] is False
+    finally:
+        for name, original in saved.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
+
+
+def test_synthesise_speech_fallback_disabled():
+    fake_edge = types.ModuleType("edge_tts")
+
+    class EmptyCommunicate:
+        def __init__(self, text, voice):
+            pass
+        def stream(self):
+            async def empty():
+                if False:
+                    yield None
+            return empty()
+
+    fake_edge.Communicate = EmptyCommunicate
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: "edge" if key == "TTS_PROVIDER" else ""
+
+    saved_edge = sys.modules.get("edge_tts")
+    saved_config = sys.modules.get("config")
+    sys.modules["edge_tts"] = fake_edge
+    sys.modules["config"] = fake_config
+    try:
+        assert mh._synthesise_speech("hello", "en-US-AriaNeural") is None
+    finally:
+        if saved_edge is None:
+            sys.modules.pop("edge_tts", None)
+        else:
+            sys.modules["edge_tts"] = saved_edge
+        if saved_config is None:
+            sys.modules.pop("config", None)
+        else:
+            sys.modules["config"] = saved_config
+
+
+def test_google_language_mapping_matches_gtts_codes(monkeypatch=None):
+    mapping = {"nb-NO-PernilleNeural": "no", "he-IL-AviNeural": "iw", "fil-PH-AngeloNeural": "tl"}
+    assert mh.detect_language("Hello, this is an English sentence.") == "en"
+
+    import speech_language
+    for voice, expected in mapping.items():
+        edge_language = voice.split("-", 1)[0].lower()
+        normalized = {"nb": "no", "he": "iw", "fil": "tl"}.get(edge_language, edge_language)
+        assert normalized == expected
+
+
 if __name__ == "__main__":
     test_no_image_returns_marker()
     test_describe_memoizes_per_turn()
@@ -425,4 +507,7 @@ if __name__ == "__main__":
     test_speak_success()
     test_synthesise_speech_uses_edge_tts()
     test_synthesise_speech_falls_back_to_google_tts()
+    test_synthesise_speech_google_primary()
+    test_synthesise_speech_fallback_disabled()
+    test_google_language_mapping_matches_gtts_codes()
     print("all media_handler tests passed")
