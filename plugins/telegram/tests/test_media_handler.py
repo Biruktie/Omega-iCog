@@ -3,7 +3,10 @@ import os, sys
 import types
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unittest.mock import patch
+import pytest
 import media_handler as mh
+import speech_language as sl
 
 
 def test_no_image_returns_marker():
@@ -318,6 +321,58 @@ def test_speak_success():
         mh._synthesise_speech = orig_synth
         mh._live_send_voice, mh._live_send_chat_action, mh._live_channel = orig_send, orig_action, orig_chan
 
+def test_speak_succeeds_when_edge_voice_catalogue_fails(monkeypatch):
+    import sys
+    import types
+
+    orig_cache = sl._available_voices_cache
+    orig_cache_validated = sl._validated_voices_cache.copy()
+    orig_allowed = mh._tts_allowed
+    orig_unsafe = mh._prompt_is_unsafe
+    orig_synth = mh._synthesise_speech
+    orig_send = mh._live_send_voice
+    orig_action = mh._live_send_chat_action
+    orig_channel = mh._live_channel
+
+    async def failing_list_voices():
+        raise RuntimeError("Edge voice catalogue unavailable")
+
+    fake_edge_tts = types.ModuleType("edge_tts")
+    fake_edge_tts.list_voices = failing_list_voices
+
+    sent = {}
+    actions = []
+
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge_tts)
+
+    sl._available_voices_cache = None
+    sl._validated_voices_cache.clear()
+    mh._tts_allowed = lambda: True
+    mh._prompt_is_unsafe = lambda text: False
+    mh._synthesise_speech = lambda text, voice: b"audio-bytes"
+    mh._live_send_voice = lambda audio_bytes, caption=None: sent.update(
+        bytes=audio_bytes
+    )
+    mh._live_send_chat_action = lambda action: actions.append(action)
+
+    try:
+        out = mh.speak("hello there")
+
+        assert out == "VOICE_SENT", out
+        assert sent["bytes"] == b"audio-bytes", sent
+        assert "record_voice" in actions, actions
+        assert sl._available_voices_cache is None
+    finally:
+        sl._available_voices_cache = orig_cache
+        sl._validated_voices_cache.clear()
+        sl._validated_voices_cache.update(orig_cache_validated)
+        mh._tts_allowed = orig_allowed
+        mh._prompt_is_unsafe = orig_unsafe
+        mh._synthesise_speech = orig_synth
+        mh._live_send_voice = orig_send
+        mh._live_send_chat_action = orig_action
+        mh._live_channel = orig_channel
+
 
 def test_synthesise_speech_uses_edge_tts():
     calls = {}
@@ -474,16 +529,170 @@ def test_synthesise_speech_fallback_disabled():
             sys.modules["config"] = saved_config
 
 
-def test_google_language_mapping_matches_gtts_codes(monkeypatch=None):
-    mapping = {"nb-NO-PernilleNeural": "no", "he-IL-AviNeural": "iw", "fil-PH-AngeloNeural": "tl"}
-    assert mh.detect_language("Hello, this is an English sentence.") == "en"
+def test_google_language_mapping_matches_gtts_codes(monkeypatch):
+    import sys
+    import types
+    import config
 
-    import speech_language
-    for voice, expected in mapping.items():
-        edge_language = voice.split("-", 1)[0].lower()
-        normalized = {"nb": "no", "he": "iw", "fil": "tl"}.get(edge_language, edge_language)
-        assert normalized == expected
+    mapping = {
+        "nb-NO-PernilleNeural": "no",
+        "he-IL-AviNeural": "iw",
+        "fil-PH-AngeloNeural": "tl",
+    }
 
+    received_languages = []
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            received_languages.append(lang)
+
+        def write_to_fp(self, buffer):
+            buffer.write(b"fake-audio")
+
+    # Force the voice-based mapping path.
+    monkeypatch.setattr(mh, "detect_language", lambda text: None)
+
+    # Force Google as the primary provider, with no fallback.
+    monkeypatch.setattr(
+        config,
+        "config_get_by_key",
+        lambda key, default=None: {
+            "TTS_PROVIDER": "google",
+            "TTS_FALLBACK_PROVIDER": "none",
+        }.get(key, default),
+    )
+
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
+    monkeypatch.setitem(sys.modules, "gtts", fake_gtts)
+
+    for voice, expected_language in mapping.items():
+        audio = mh._synthesise_speech(
+            "A sentence for testing synthesis.",
+            voice,
+        )
+
+        assert audio == b"fake-audio"
+        assert received_languages[-1] == expected_language
+
+    assert received_languages == list(mapping.values())
+
+def test_synthesise_speech_maps_norwegian_to_google_language():
+    fake_gtts = types.ModuleType("gtts")
+    calls = {}
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            calls["lang"] = lang
+
+        def write_to_fp(self, buf):
+            buf.write(b"norwegian-mp3")
+
+    fake_gtts.gTTS = FakeGTTS
+
+    original_gtts = sys.modules.get("gtts")
+    original_config = sys.modules.get("config")
+
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: (
+        "google" if key == "TTS_PROVIDER" else ""
+    )
+
+    sys.modules["gtts"] = fake_gtts
+    sys.modules["config"] = fake_config
+
+    with patch.object(mh, "detect_language", return_value="nb"):
+        try:
+            result = mh._synthesise_speech("Hei", "nb-NO-Standard")
+        finally:
+            if original_gtts is None:
+                sys.modules.pop("gtts", None)
+            else:
+                sys.modules["gtts"] = original_gtts
+
+            if original_config is None:
+                sys.modules.pop("config", None)
+            else:
+                sys.modules["config"] = original_config
+
+    assert result == b"norwegian-mp3"
+    assert calls["lang"] == "no"
+
+def test_google_tts_does_not_retry_english():
+    calls = []
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            calls.append(lang)
+            raise ValueError("unsupported language")
+
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
+
+    original_gtts = sys.modules.get("gtts")
+    original_config = sys.modules.get("config")
+
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: (
+        "google" if key == "TTS_PROVIDER" else ""
+    )
+
+    sys.modules["gtts"] = fake_gtts
+    sys.modules["config"] = fake_config
+
+    try:
+        result = mh._synthesise_speech("Hello", "en-US-AriaNeural")
+    finally:
+        if original_gtts is None:
+            sys.modules.pop("gtts", None)
+        else:
+            sys.modules["gtts"] = original_gtts
+
+        if original_config is None:
+            sys.modules.pop("config", None)
+        else:
+            sys.modules["config"] = original_config
+
+    assert result is None
+    assert calls == ["en"]
+
+def test_google_tts_network_error_does_not_retry_in_english():
+    calls = []
+
+    class FakeGTTS:
+        def __init__(self, text, lang):
+            calls.append(lang)
+            raise RuntimeError("network unavailable")
+
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
+
+    original_gtts = sys.modules.get("gtts")
+    original_config = sys.modules.get("config")
+
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = lambda key, default=None: (
+        "google" if key == "TTS_PROVIDER" else ""
+    )
+
+    sys.modules["gtts"] = fake_gtts
+    sys.modules["config"] = fake_config
+
+    try:
+        result = mh._synthesise_speech("Bonjour", "fr-FR-DeniseNeural")
+    finally:
+        if original_gtts is None:
+            sys.modules.pop("gtts", None)
+        else:
+            sys.modules["gtts"] = original_gtts
+
+        if original_config is None:
+            sys.modules.pop("config", None)
+        else:
+            sys.modules["config"] = original_config
+
+    assert result is None
+    assert calls == ["fr"]
 
 if __name__ == "__main__":
     test_no_image_returns_marker()
@@ -505,9 +714,14 @@ if __name__ == "__main__":
     test_speak_disabled()
     test_speak_synthesis_failure()
     test_speak_success()
+    mp = pytest.MonkeyPatch()
+    test_speak_succeeds_when_edge_voice_catalogue_fails(mp)
     test_synthesise_speech_uses_edge_tts()
     test_synthesise_speech_falls_back_to_google_tts()
     test_synthesise_speech_google_primary()
     test_synthesise_speech_fallback_disabled()
     test_google_language_mapping_matches_gtts_codes()
+    test_google_tts_network_error_does_not_retry_in_english()
+    test_google_tts_does_not_retry_english()
+    test_synthesise_speech_maps_norwegian_to_google_language()
     print("all media_handler tests passed")

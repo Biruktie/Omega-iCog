@@ -28,6 +28,11 @@ def init_config(command_line):
     except:
         logger.exception(f"Could not load configuration file {config_path}")
 
+def _is_disabled_tts_fallback(value):
+    return isinstance(value, str) and value.strip().lower() in {
+        "none", "off", "disabled"
+    }
+
 def config_get_by_key(key, default=None):
     """Get configuration parameter from the list of sources: (1) command line
     parameters, (2) environment variable with OMEGA_$key name, (3)
@@ -36,7 +41,14 @@ def config_get_by_key(key, default=None):
     if key in _CONFIG:
         return _CONFIG.get(key)
     if key in _COMMAND_LINE:
-        return _cache_config(key, _COMMAND_LINE.get(key), "command line")
+        value = _COMMAND_LINE.get(key)
+
+        if key != "TTS_FALLBACK_PROVIDER" or (
+            value is not None and str(value).strip()
+        ):
+            if key == "TTS_FALLBACK_PROVIDER":
+                value = "" if _is_disabled_tts_fallback(value) else str(value).strip().lower()
+            return _cache_config(key, value, "command line")
     # The documented speech setting also accepts its unprefixed environment
     # name. Keep this alias specific; other configuration keeps its contract.
     if key == "EDGE_TTS_VOICE":
@@ -48,9 +60,23 @@ def config_get_by_key(key, default=None):
         for name in (f"OMEGA_{key}", key):
             if name not in os.environ:
                 continue
+
             value = os.environ.get(name)
-            if isinstance(value, str):
-                return _cache_config(key, value.strip(), "environment variable")
+
+            if not isinstance(value, str):
+                continue
+
+            value = value.strip()
+
+            if key == "TTS_FALLBACK_PROVIDER":
+                if not value:
+                    continue
+                if _is_disabled_tts_fallback(value):
+                    value = ""
+                else:
+                    value = value.lower()
+
+            return _cache_config(key, value, "environment variable")
     envkey = f"OMEGA_{key}"
     if envkey in os.environ and key != "EDGE_TTS_VOICE":
         return _cache_config(key, os.environ.get(envkey), "environment variable")

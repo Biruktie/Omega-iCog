@@ -2,15 +2,9 @@
 from html.parser import HTMLParser
 import re
 
-try:
-    import pyromark
-except ImportError:
-    pyromark = None
+import pyromark
 
-try:
-    import emoji
-except ImportError:
-    emoji = None
+import emoji
 
 _URL = re.compile(r"""
     (?<![\w@./-])

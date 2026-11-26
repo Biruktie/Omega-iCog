@@ -80,7 +80,7 @@ jobs:
             LLM_MODEL=${LLM_MODEL}
             EDGE_TTS_VOICE=${EDGE_TTS_VOICE}
             TTS_PROVIDER=${TTS_PROVIDER}
-            TTS_FALLBACK_PROVIDER=${TTS_FALLBACK_PROVIDER}
+            TTS_FALLBACK_PROVIDER=${TTS_FALLBACK_PROVIDER:-google}
             EOF
             chmod 600 /omega/.env
 

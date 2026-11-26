@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import logging
 import re
+import threading
 
 from text_splitter import split_for_telegram
 
@@ -164,41 +165,54 @@ def _segments(text):
 
 
 _available_voices_cache = None
+_available_voices_lock = threading.Lock()
 
 
 def available_voices():
     """Load Edge's voice catalogue, caching successes only for retries after outages."""
     global _available_voices_cache
-    if _available_voices_cache:
-        return _available_voices_cache
-    try:
-        import edge_tts
 
-        async def fetch():
-            return await asyncio.wait_for(edge_tts.list_voices(), timeout=10)
+    with _available_voices_lock:
+        if _available_voices_cache is not None:
+            return _available_voices_cache
 
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            voices = asyncio.run(fetch())
-        else:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                voices = pool.submit(asyncio.run, fetch()).result()
-        if voices:
-            _available_voices_cache = voices
-        return voices or []
-    except Exception as exc:
-        logger.warning("Could not load Edge TTS voice catalogue: %s", exc)
-        return []
+            import edge_tts
+
+            async def fetch():
+                return await asyncio.wait_for(edge_tts.list_voices(), timeout=10)
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                voices = asyncio.run(fetch())
+            else:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    voices = pool.submit(asyncio.run, fetch()).result()
+
+            if voices:
+                _available_voices_cache = voices
+
+            return voices or []
+
+        except Exception as exc:
+            logger.warning(
+                "Could not load Edge TTS voice catalogue: %s", exc
+            )
+            return []
 
 
 def _clear_available_voices_cache():
     global _available_voices_cache
-    _available_voices_cache = None
+
+    with _available_voices_lock:
+        _available_voices_cache = None
+
+    with _validated_voices_lock:
+        _validated_voices_cache.clear()
 
 
 available_voices.cache_clear = _clear_available_voices_cache
-
 
 def select_voice(language, configured_voice):
     # Keep the configured voice for its own language and uncertain text.
@@ -209,11 +223,19 @@ def select_voice(language, configured_voice):
     if not voices:
         logger.warning("Edge TTS voice catalogue unavailable; using configured voice %s", configured_voice)
         return configured_voice
-    gender = next((voice.get("Gender") for voice in voices
-                   if voice.get("ShortName") == configured_voice), None)
+    gender = next(
+    (
+        voice.get("Gender")
+        for voice in voices
+        if voice.get("ShortName") == configured_voice
+    ),
+    None,
+    )
+
     if gender not in ("Female", "Male"):
-        logger.warning("Cannot determine gender of configured voice %r; using %s", configured_voice, DEFAULT_VOICE)
-        return DEFAULT_VOICE
+        raise ValueError(
+            f"Cannot determine gender of configured voice: {configured_voice!r}"
+        )
     candidates = sorted(
         voice["ShortName"] for voice in voices
         if _language(voice.get("Locale", "")) == _language(language)
@@ -233,18 +255,55 @@ def select_voice(language, configured_voice):
     return next((voice for voice in candidates if voice.startswith(locale + "-")), candidates[0])
 
 
-@lru_cache(maxsize=64)
-def validated_voice(configured_voice):
-    """Cache successful validation only; catalogue outages are not typos."""
-    voices = available_voices()
-    if not voices:
-        logger.warning("Edge TTS voice catalogue unavailable; retaining configured voice %r", configured_voice)
-        return configured_voice
-    if any(v.get("ShortName") == configured_voice for v in voices):
-        return configured_voice
-    logger.warning("Unknown configured voice %r; using %s", configured_voice, DEFAULT_VOICE)
-    return DEFAULT_VOICE
+_validated_voices_cache = {}
+_validated_voices_lock = threading.Lock()
 
+
+def validated_voice(configured_voice):
+    """Cache validation results only when the Edge catalogue is available."""
+
+    voices = available_voices()
+
+    # Never cache results when the catalogue is unavailable.
+    if not voices:
+        logger.warning(
+            "Edge TTS voice catalogue unavailable; retaining configured voice %r",
+            configured_voice,
+        )
+        return configured_voice
+
+    with _validated_voices_lock:
+        if configured_voice in _validated_voices_cache:
+            return _validated_voices_cache[configured_voice]
+
+        if any(
+            voice.get("ShortName") == configured_voice
+            for voice in voices
+        ):
+            result = configured_voice
+        else:
+            logger.warning(
+                "Unknown configured voice %r; using %s",
+                configured_voice,
+                DEFAULT_VOICE,
+            )
+            result = DEFAULT_VOICE
+
+        if len(_validated_voices_cache) >= 64:
+            _validated_voices_cache.pop(
+                next(iter(_validated_voices_cache))
+            )
+
+        _validated_voices_cache[configured_voice] = result
+        return result
+
+
+def _clear_validated_voice_cache():
+    with _validated_voices_lock:
+        _validated_voices_cache.clear()
+
+
+validated_voice.cache_clear = _clear_validated_voice_cache
 
 def speech_parts(text, configured_voice=DEFAULT_VOICE):
     """Select the reply voice, switching sentences it cannot read; retain sentences for chunk retries."""
@@ -269,10 +328,3 @@ def speech_parts(text, configured_voice=DEFAULT_VOICE):
                 logger.info("Speech segment language=%s voice=%s", segment_language, segment_voice)
         parts.extend((piece, segment_voice) for piece in split_for_telegram(segment))
     return parts
-
-
-def _clear_available_voices_cache():
-    global _available_voices_cache
-    _available_voices_cache = None
-
-available_voices.cache_clear = _clear_available_voices_cache

@@ -17,8 +17,6 @@ memory/.channel/
 .venv 
 venv/
 
-debug_nginx.conf
-
 # editor backup files
 *~
 Autotests/venv/

@@ -481,31 +481,56 @@ def _synthesise_speech(text, voice):
     def _google_lang_from_voice(chunk_text, chunk_voice):
         language = detect_language(chunk_text)
         if language:
-            if language == "no":
-                return "no"
-            if language == "he":
-                return "iw"
-            if language == "fil":
-                return "tl"
-            return language
+            language = language.lower()
+            return {
+                "nb": "no",
+                "nn": "no",
+                "he": "iw",
+                "fil": "tl",
+            }.get(language, language)
+
         if not isinstance(chunk_voice, str) or not chunk_voice.strip():
             return "en"
-        edge_language = chunk_voice.split("-", 1)[0].lower()
-        return {"nb": "no", "nn": "no", "he": "iw", "fil": "tl"}.get(edge_language, edge_language)
 
+        edge_language = chunk_voice.split("-", 1)[0].lower()
+        return {
+            "nb": "no",
+            "nn": "no",
+            "he": "iw",
+            "fil": "tl",
+        }.get(edge_language, edge_language)
+    
     def _synthesise_google(chunk_text, chunk_voice):
         import io
         from gtts import gTTS
 
         language = _google_lang_from_voice(chunk_text, chunk_voice)
-        for candidate in (language, "en"):
-            try:
-                with io.BytesIO() as buf:
-                    gTTS(text=chunk_text, lang=candidate).write_to_fp(buf)
-                    return buf.getvalue()
-            except (ValueError, Exception):
-                continue
-        return None
+
+        try:
+            with io.BytesIO() as buf:
+                gTTS(text=chunk_text, lang=language).write_to_fp(buf)
+                return buf.getvalue()
+
+        except ValueError:
+            if language == "en":
+                logger.warning(
+                    "Google TTS does not support language %s", language
+                )
+                return None
+
+            logger.warning(
+                "Google TTS does not support language %s; falling back to English",
+                language,
+            )
+
+        try:
+            with io.BytesIO() as buf:
+                gTTS(text=chunk_text, lang="en").write_to_fp(buf)
+                return buf.getvalue()
+
+        except Exception as exc:
+            logger.warning("Google TTS synthesis failed: %s", exc)
+            return None
 
     try:
         try:
