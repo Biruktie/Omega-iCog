@@ -49,9 +49,7 @@ class _HTMLText(HTMLParser):
 
 def _markdown_text(text):
     """Keep textual parser events, omitting image subtrees and destinations."""
-    if pyromark is None:
-        # Dependency missing: keep text usable for TTS instead of failing import.
-        return text
+
     source = text.encode("utf-8")  # Parser ranges are UTF-8 byte offsets.
     parts = []
     previous_end = 0
@@ -111,8 +109,7 @@ def prepare_speech(text):
     text = _remove_urls(text)
     # Emoji, their joiners/modifiers and keycap sequences, preserving ordinary
     # digits, punctuation and non-Latin letters.
-    if emoji is not None:
-        text = emoji.replace_emoji(text, replace="")
+    text = emoji.replace_emoji(text, replace="")
     text = re.sub(r"[\U0001f000-\U0001faff\u2600-\u27bf\u200d\ufe0f\u20e3]", "", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = "\n".join(line.strip() for line in text.splitlines()).strip()

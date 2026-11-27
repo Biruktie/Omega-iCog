@@ -350,8 +350,6 @@ def generate_and_send(prompt):
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
 EDGE_TTS_TIMEOUT = 30
-DEFAULT_TTS_PROVIDER = "edge"
-DEFAULT_TTS_FALLBACK_PROVIDER = "google"
 RECORDING_REFRESH_SECONDS = 4
 MAX_VOICE_REQUESTS = 100
 _voice_requests = OrderedDict()
@@ -491,15 +489,6 @@ def _synthesise_edge(chunk_text, chunk_voice):
     # asyncio.run() cannot execute inside an already-running event loop.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, _run()).result()
-
-
-# Google TTS uses different language codes for these languages.
-_GOOGLE_LANGUAGE_CODES = {
-    "nb": "no",
-    "nn": "no",
-    "he": "iw",
-    "fil": "tl",
-}
 
 
 def _google_lang_from_voice(chunk_text, chunk_voice):

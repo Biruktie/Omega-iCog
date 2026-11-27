@@ -550,6 +550,7 @@ if __name__ == "__main__":
     test_speak_succeeds_when_edge_voice_catalogue_fails()
     test_synthesise_speech_uses_edge_tts()
     test_synthesise_speech_falls_back_to_google_tts()
+    test_synthesise_speech_falls_back_when_edge_returns_empty_audio() 
     test_synthesise_speech_falls_back_on_edge_errors()
     test_google_language_mapping_matches_gtts_codes()
     test_synthesise_speech_maps_detected_norwegian_to_google_code()
