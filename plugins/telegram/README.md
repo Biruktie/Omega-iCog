@@ -81,7 +81,7 @@ they belong to the proxy, not here.
 | `OPENAI_API_KEY` | for safety checks | Moderation API; without it the ethics passes allow content through |
 | `EDGE_TTS_VOICE` | no | Preferred/fallback speech voice; also accepts `OMEGA_EDGE_TTS_VOICE`. Defaults to `en-US-AriaNeural`. Other detected languages automatically use a matching voice. |
 | `TTS_PROVIDER` / `OMEGA_TTS_PROVIDER` | no | Primary TTS provider. `edge` (default) or `google`. |
-| `TTS_FALLBACK_PROVIDER` / `OMEGA_TTS_FALLBACK_PROVIDER` | no | Secondary TTS provider used when primary synthesis fails. Defaults to `google`. Set empty or omit for no fallback. |
+| `TTS_FALLBACK_PROVIDER` / `OMEGA_TTS_FALLBACK_PROVIDER` | no | Secondary TTS provider used when primary synthesis fails. Defaults to `google` when empty or omitted. Set to `none`, `off`, or `disabled` to disable fallback. |
 | `VISION_PROVIDER` | no | `Anthropic` (default) or `OpenRouter` |
 | `VISION_MODEL` | no | Overrides the provider's default vision model |
 | `IMAGE_PROVIDER` | no | `OpenRouter` (default, FLUX) or `OpenAI` |

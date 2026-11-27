@@ -81,7 +81,19 @@ def config_get_by_key(key, default=None):
     if envkey in os.environ and key != "EDGE_TTS_VOICE":
         return _cache_config(key, os.environ.get(envkey), "environment variable")
     if key in _CONFIG_FILE:
-        return _cache_config(key, _CONFIG_FILE.get(key), "config file")
+        value = _CONFIG_FILE.get(key)
+
+        if key == "TTS_FALLBACK_PROVIDER":
+            value = str(value or "").strip()
+
+            if _is_disabled_tts_fallback(value):
+                value = ""
+            elif not value:
+                value = "google"
+            else:
+                value = value.lower()
+
+        return _cache_config(key, value, "config file")
     return _cache_config(key, default, "defaults")
 
 def _cache_config(key, value, source):

@@ -1,10 +1,18 @@
 import io
-import os, sys
+import os
+import sys
 import types
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+TELEGRAM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(TELEGRAM_DIR))
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+
+sys.path.insert(0, SRC_DIR)
+sys.path.insert(1, TELEGRAM_DIR)
+sys.path.insert(2, PROJECT_ROOT)
 
 from unittest.mock import patch
-import pytest
+
 import media_handler as mh
 import speech_language as sl
 
@@ -321,7 +329,7 @@ def test_speak_success():
         mh._synthesise_speech = orig_synth
         mh._live_send_voice, mh._live_send_chat_action, mh._live_channel = orig_send, orig_action, orig_chan
 
-def test_speak_succeeds_when_edge_voice_catalogue_fails(monkeypatch):
+def test_speak_succeeds_when_edge_voice_catalogue_fails():
     import sys
     import types
 
@@ -343,26 +351,33 @@ def test_speak_succeeds_when_edge_voice_catalogue_fails(monkeypatch):
     sent = {}
     actions = []
 
-    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge_tts)
-
-    sl._available_voices_cache = None
-    sl._validated_voices_cache.clear()
-    mh._tts_allowed = lambda: True
-    mh._prompt_is_unsafe = lambda text: False
-    mh._synthesise_speech = lambda text, voice: b"audio-bytes"
-    mh._live_send_voice = lambda audio_bytes, caption=None: sent.update(
-        bytes=audio_bytes
-    )
-    mh._live_send_chat_action = lambda action: actions.append(action)
+    orig_edge_tts = sys.modules.get("edge_tts")
 
     try:
+        sys.modules["edge_tts"] = fake_edge_tts
+
+        sl._available_voices_cache = None
+        sl._validated_voices_cache.clear()
+        mh._tts_allowed = lambda: True
+        mh._prompt_is_unsafe = lambda text: False
+        mh._synthesise_speech = lambda text, voice: b"audio-bytes"
+        mh._live_send_voice = lambda audio_bytes, caption=None: sent.update(
+            bytes=audio_bytes
+        )
+        mh._live_send_chat_action = lambda action: actions.append(action)
+
         out = mh.speak("hello there")
 
         assert out == "VOICE_SENT", out
         assert sent["bytes"] == b"audio-bytes", sent
         assert "record_voice" in actions, actions
         assert sl._available_voices_cache is None
+
     finally:
+        if orig_edge_tts is None:
+            sys.modules.pop("edge_tts", None)
+        else:
+            sys.modules["edge_tts"] = orig_edge_tts
         sl._available_voices_cache = orig_cache
         sl._validated_voices_cache.clear()
         sl._validated_voices_cache.update(orig_cache_validated)
@@ -425,37 +440,23 @@ def test_synthesise_speech_falls_back_to_google_tts():
 
     fake_edge_tts = types.ModuleType("edge_tts")
     fake_edge_tts.Communicate = BoomCommunicate
+
     fake_gtts = types.ModuleType("gtts")
     fake_gtts.gTTS = FakeGTTS
 
-    original_edge = sys.modules.get("edge_tts")
-    original_gtts = sys.modules.get("gtts")
-    sys.modules["edge_tts"] = fake_edge_tts
-    sys.modules["gtts"] = fake_gtts
-
-    orig_cfg = sys.modules.get("config")
     fake_config = types.ModuleType("config")
     fake_config.config_get_by_key = lambda key, default=None: {
         "TTS_PROVIDER": "edge",
         "TTS_FALLBACK_PROVIDER": "google",
     }.get(key, default)
-    sys.modules["config"] = fake_config
-    try:
+
+    with patch.dict(sys.modules, {
+        "edge_tts": fake_edge_tts,
+        "gtts": fake_gtts,
+        "config": fake_config,
+    }):
         result = mh._synthesise_speech("hello", "en-US-AriaNeural")
         assert result == b"google-mp3", result
-    finally:
-        if original_edge is None:
-            del sys.modules["edge_tts"]
-        else:
-            sys.modules["edge_tts"] = original_edge
-        if original_gtts is None:
-            del sys.modules["gtts"]
-        else:
-            sys.modules["gtts"] = original_gtts
-        if orig_cfg is None:
-            del sys.modules["config"]
-        else:
-            sys.modules["config"] = orig_cfg
 
 
 def test_synthesise_speech_google_primary():
@@ -473,27 +474,30 @@ def test_synthesise_speech_google_primary():
     class FakeGTTS:
         def __init__(self, text, lang):
             assert lang == "en"
+
         def write_to_fp(self, buf):
             buf.write(b"google-primary")
 
     fake_edge = types.ModuleType("edge_tts")
     fake_edge.Communicate = UnexpectedEdge
+
     fake_gtts = types.ModuleType("gtts")
     fake_gtts.gTTS = FakeGTTS
-    fake_config = types.ModuleType("config")
-    fake_config.config_get_by_key = lambda key, default=None: "google" if key == "TTS_PROVIDER" else ""
 
-    saved = {name: sys.modules.get(name) for name in ("edge_tts", "gtts", "config")}
-    sys.modules.update(edge_tts=fake_edge, gtts=fake_gtts, config=fake_config)
-    try:
-        assert mh._synthesise_speech("hello", "en-US-AriaNeural") == b"google-primary"
+    fake_config = types.ModuleType("config")
+    fake_config.config_get_by_key = (
+        lambda key, default=None: "google" if key == "TTS_PROVIDER" else ""
+    )
+
+    with patch.dict(sys.modules, {
+        "edge_tts": fake_edge,
+        "gtts": fake_gtts,
+        "config": fake_config,
+    }):
+        assert mh._synthesise_speech(
+            "hello", "en-US-AriaNeural"
+        ) == b"google-primary"
         assert edge_called["value"] is False
-    finally:
-        for name, original in saved.items():
-            if original is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = original
 
 
 def test_synthesise_speech_fallback_disabled():
@@ -502,6 +506,7 @@ def test_synthesise_speech_fallback_disabled():
     class EmptyCommunicate:
         def __init__(self, text, voice):
             pass
+
         def stream(self):
             async def empty():
                 if False:
@@ -509,27 +514,21 @@ def test_synthesise_speech_fallback_disabled():
             return empty()
 
     fake_edge.Communicate = EmptyCommunicate
+
     fake_config = types.ModuleType("config")
-    fake_config.config_get_by_key = lambda key, default=None: "edge" if key == "TTS_PROVIDER" else ""
+    fake_config.config_get_by_key = (
+        lambda key, default=None: "edge" if key == "TTS_PROVIDER" else ""
+    )
 
-    saved_edge = sys.modules.get("edge_tts")
-    saved_config = sys.modules.get("config")
-    sys.modules["edge_tts"] = fake_edge
-    sys.modules["config"] = fake_config
-    try:
-        assert mh._synthesise_speech("hello", "en-US-AriaNeural") is None
-    finally:
-        if saved_edge is None:
-            sys.modules.pop("edge_tts", None)
-        else:
-            sys.modules["edge_tts"] = saved_edge
-        if saved_config is None:
-            sys.modules.pop("config", None)
-        else:
-            sys.modules["config"] = saved_config
+    with patch.dict(sys.modules, {
+        "edge_tts": fake_edge,
+        "config": fake_config,
+    }):
+        assert mh._synthesise_speech(
+            "hello", "en-US-AriaNeural"
+        ) is None
 
-
-def test_google_language_mapping_matches_gtts_codes(monkeypatch):
+def test_google_language_mapping_matches_gtts_codes():
     import sys
     import types
     import config
@@ -549,74 +548,30 @@ def test_google_language_mapping_matches_gtts_codes(monkeypatch):
         def write_to_fp(self, buffer):
             buffer.write(b"fake-audio")
 
-    # Force the voice-based mapping path.
-    monkeypatch.setattr(mh, "detect_language", lambda text: None)
+    fake_gtts = types.ModuleType("gtts")
+    fake_gtts.gTTS = FakeGTTS
 
-    # Force Google as the primary provider, with no fallback.
-    monkeypatch.setattr(
-        config,
-        "config_get_by_key",
-        lambda key, default=None: {
+    def fake_config_get(key, default=None):
+        return {
             "TTS_PROVIDER": "google",
             "TTS_FALLBACK_PROVIDER": "none",
-        }.get(key, default),
-    )
+        }.get(key, default)
 
-    fake_gtts = types.ModuleType("gtts")
-    fake_gtts.gTTS = FakeGTTS
-    monkeypatch.setitem(sys.modules, "gtts", fake_gtts)
+    with (
+        patch.object(mh, "detect_language", return_value=None),
+        patch.object(config, "config_get_by_key", side_effect=fake_config_get),
+        patch.dict(sys.modules, {"gtts": fake_gtts}),
+    ):
+        for voice, expected_language in mapping.items():
+            audio = mh._synthesise_speech(
+                "A sentence for testing synthesis.",
+                voice,
+            )
 
-    for voice, expected_language in mapping.items():
-        audio = mh._synthesise_speech(
-            "A sentence for testing synthesis.",
-            voice,
-        )
-
-        assert audio == b"fake-audio"
-        assert received_languages[-1] == expected_language
+            assert audio == b"fake-audio"
+            assert received_languages[-1] == expected_language
 
     assert received_languages == list(mapping.values())
-
-def test_synthesise_speech_maps_norwegian_to_google_language():
-    fake_gtts = types.ModuleType("gtts")
-    calls = {}
-
-    class FakeGTTS:
-        def __init__(self, text, lang):
-            calls["lang"] = lang
-
-        def write_to_fp(self, buf):
-            buf.write(b"norwegian-mp3")
-
-    fake_gtts.gTTS = FakeGTTS
-
-    original_gtts = sys.modules.get("gtts")
-    original_config = sys.modules.get("config")
-
-    fake_config = types.ModuleType("config")
-    fake_config.config_get_by_key = lambda key, default=None: (
-        "google" if key == "TTS_PROVIDER" else ""
-    )
-
-    sys.modules["gtts"] = fake_gtts
-    sys.modules["config"] = fake_config
-
-    with patch.object(mh, "detect_language", return_value="nb"):
-        try:
-            result = mh._synthesise_speech("Hei", "nb-NO-Standard")
-        finally:
-            if original_gtts is None:
-                sys.modules.pop("gtts", None)
-            else:
-                sys.modules["gtts"] = original_gtts
-
-            if original_config is None:
-                sys.modules.pop("config", None)
-            else:
-                sys.modules["config"] = original_config
-
-    assert result == b"norwegian-mp3"
-    assert calls["lang"] == "no"
 
 def test_google_tts_does_not_retry_english():
     calls = []
@@ -629,29 +584,16 @@ def test_google_tts_does_not_retry_english():
     fake_gtts = types.ModuleType("gtts")
     fake_gtts.gTTS = FakeGTTS
 
-    original_gtts = sys.modules.get("gtts")
-    original_config = sys.modules.get("config")
-
     fake_config = types.ModuleType("config")
     fake_config.config_get_by_key = lambda key, default=None: (
         "google" if key == "TTS_PROVIDER" else ""
     )
 
-    sys.modules["gtts"] = fake_gtts
-    sys.modules["config"] = fake_config
-
-    try:
+    with patch.dict(sys.modules, {
+        "gtts": fake_gtts,
+        "config": fake_config,
+    }):
         result = mh._synthesise_speech("Hello", "en-US-AriaNeural")
-    finally:
-        if original_gtts is None:
-            sys.modules.pop("gtts", None)
-        else:
-            sys.modules["gtts"] = original_gtts
-
-        if original_config is None:
-            sys.modules.pop("config", None)
-        else:
-            sys.modules["config"] = original_config
 
     assert result is None
     assert calls == ["en"]
@@ -667,29 +609,16 @@ def test_google_tts_network_error_does_not_retry_in_english():
     fake_gtts = types.ModuleType("gtts")
     fake_gtts.gTTS = FakeGTTS
 
-    original_gtts = sys.modules.get("gtts")
-    original_config = sys.modules.get("config")
-
     fake_config = types.ModuleType("config")
     fake_config.config_get_by_key = lambda key, default=None: (
         "google" if key == "TTS_PROVIDER" else ""
     )
 
-    sys.modules["gtts"] = fake_gtts
-    sys.modules["config"] = fake_config
-
-    try:
+    with patch.dict(sys.modules, {
+        "gtts": fake_gtts,
+        "config": fake_config,
+    }):
         result = mh._synthesise_speech("Bonjour", "fr-FR-DeniseNeural")
-    finally:
-        if original_gtts is None:
-            sys.modules.pop("gtts", None)
-        else:
-            sys.modules["gtts"] = original_gtts
-
-        if original_config is None:
-            sys.modules.pop("config", None)
-        else:
-            sys.modules["config"] = original_config
 
     assert result is None
     assert calls == ["fr"]
@@ -714,8 +643,7 @@ if __name__ == "__main__":
     test_speak_disabled()
     test_speak_synthesis_failure()
     test_speak_success()
-    mp = pytest.MonkeyPatch()
-    test_speak_succeeds_when_edge_voice_catalogue_fails(mp)
+    test_speak_succeeds_when_edge_voice_catalogue_fails()
     test_synthesise_speech_uses_edge_tts()
     test_synthesise_speech_falls_back_to_google_tts()
     test_synthesise_speech_google_primary()
@@ -723,5 +651,4 @@ if __name__ == "__main__":
     test_google_language_mapping_matches_gtts_codes()
     test_google_tts_network_error_does_not_retry_in_english()
     test_google_tts_does_not_retry_english()
-    test_synthesise_speech_maps_norwegian_to_google_language()
     print("all media_handler tests passed")

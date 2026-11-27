@@ -11,9 +11,9 @@ nginx_url() {
 cd /PeTTa
 
 EMBEDDING_PROVIDER="${EMBEDDING_PROVIDER:-Local}"
-OPENAIAPI_URL="http://localhost:8080/"
-MM_URL="http://localhost:8080/"
-OPENCLAW_URL="http://localhost:8080/"
+OPENAIAPI_URL="http://localhost:8080/" # dummy value
+MM_URL="http://localhost:8080/" # dummy value
+OPENCLAW_URL="http://localhost:8080/" # dummy value
 for arg in "$@"; do
   if [[ "$arg" == embeddingprovider=* ]]; then
     EMBEDDING_PROVIDER="${arg#*=}"

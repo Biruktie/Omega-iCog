@@ -91,10 +91,8 @@ def detect_language(text):
     letters = [char.lower() for char in text if char.isalpha()]
     if len(letters) < 5 or len(set(letters)) < 3:
         return None
-    try:
-        scores = _detector().compute_language_confidence_values(text)
-    except (ImportError, ModuleNotFoundError):
-        return None
+    scores = _detector().compute_language_confidence_values(text)
+    
     if _script_is_main(text, r"[\u0400-\u052f]+") and (
             not scores or scores[0].value < .35):
         scores = _cyrillic_detector().compute_language_confidence_values(text)
@@ -129,10 +127,7 @@ def _cyrillic_language(text):
         return "uk"
     if re.search(r"[ыэёъЫЭЁЪ]", text):
         return "ru"
-    try:
-        scores = _cyrillic_detector().compute_language_confidence_values(text)
-    except (ImportError, ModuleNotFoundError):
-        return "ru"
+    scores = _cyrillic_detector().compute_language_confidence_values(text)
     if scores and scores[0].value >= .60:
         return scores[0].language.iso_code_639_1.name.lower()
     return "ru"
