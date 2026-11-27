@@ -80,8 +80,6 @@ they belong to the proxy, not here.
 | `OPENROUTER_API_KEY` | for image gen + Whisper | Also the vision key if `VISION_PROVIDER=OpenRouter` |
 | `OPENAI_API_KEY` | for safety checks | Moderation API; without it the ethics passes allow content through |
 | `EDGE_TTS_VOICE` | no | Preferred/fallback speech voice; also accepts `OMEGA_EDGE_TTS_VOICE`. Defaults to `en-US-AriaNeural`. Other detected languages automatically use a matching voice. |
-| `TTS_PROVIDER` / `OMEGA_TTS_PROVIDER` | no | Primary TTS provider. `edge` (default) or `google`. |
-| `TTS_FALLBACK_PROVIDER` / `OMEGA_TTS_FALLBACK_PROVIDER` | no | Secondary TTS provider used when primary synthesis fails. Defaults to `google` when empty or omitted. Set to `none`, `off`, or `disabled` to disable fallback. |
 | `VISION_PROVIDER` | no | `Anthropic` (default) or `OpenRouter` |
 | `VISION_MODEL` | no | Overrides the provider's default vision model |
 | `IMAGE_PROVIDER` | no | `OpenRouter` (default, FLUX) or `OpenAI` |
@@ -99,8 +97,11 @@ Both environment names survive the container entrypoint. `scripts/omega`
 forwards the voice from its environment; staging/production deployments read
 the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
 
-Provider precedence is `TTS_PROVIDER` first, then `TTS_FALLBACK_PROVIDER` if
-the primary provider fails. The default path is Edge first, then Google TTS.
+Speech synthesis uses **Edge TTS first**, with automatic fallback to **Google TTS** if Edge synthesis fails, times out, returns empty audio, or cannot be used because of a voice catalogue outage.
+
+No provider-selection configuration is required. The fallback happens automatically.
+
+The `EDGE_TTS_VOICE` setting can still be used to configure the preferred Edge TTS voice.
 
 - The whole reply's main language selects the reply voice, preserving configured
   gender. A sentence written mostly in a script that voice cannot read, such as

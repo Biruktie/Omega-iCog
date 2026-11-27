@@ -112,6 +112,12 @@ def _language(code):
     return {"nb": "no", "nn": "no"}.get(code, code)
 
 
+def google_tts_language(code):
+    """Convert a normalized language code to a Google TTS language code."""
+    code = _language(code)
+    return {"he": "iw", "fil": "tl"}.get(code, code)
+
+
 def _present(text, script):
     pattern = _SCRIPTS[script]
     return re.search(pattern if script in _IDEOGRAPHIC_SCRIPTS else pattern + "{2,}", text)
@@ -209,45 +215,62 @@ def _clear_available_voices_cache():
 
 available_voices.cache_clear = _clear_available_voices_cache
 
+
 def select_voice(language, configured_voice):
     # Keep the configured voice for its own language and uncertain text.
     if language is None or _language(language) == _language(configured_voice):
         return configured_voice
+
     language = _language(language)
     voices = available_voices()
+
     if not voices:
-        logger.warning("Edge TTS voice catalogue unavailable; using configured voice %s", configured_voice)
+        logger.warning(
+            "Edge TTS voice catalogue unavailable; using configured voice %s",
+            configured_voice,
+        )
         return configured_voice
+
     gender = next(
-    (
-        voice.get("Gender")
-        for voice in voices
-        if voice.get("ShortName") == configured_voice
-    ),
-    None,
+        (
+            voice.get("Gender")
+            for voice in voices
+            if voice.get("ShortName") == configured_voice
+        ),
+        None,
     )
 
     if gender not in ("Female", "Male"):
         raise ValueError(
             f"Cannot determine gender of configured voice: {configured_voice!r}"
         )
+
     candidates = sorted(
-        voice["ShortName"] for voice in voices
-        if _language(voice.get("Locale", "")) == _language(language)
+        voice["ShortName"]
+        for voice in voices
+        if _language(voice.get("Locale", "")) == language
         and voice.get("ShortName")
         and voice.get("Gender") == gender
     )
+
     if not candidates:
         logger.warning(
             "No %s speech voice for detected language %s; using configured voice %s",
-            gender.lower(), language, configured_voice,
+            gender.lower(),
+            language,
+            configured_voice,
         )
         return configured_voice
+
     preferred = PREFERRED_VOICES.get(language)
     if preferred in candidates:
         return preferred
+
     locale = PREFERRED_LOCALES.get(language, f"{language}-{language.upper()}")
-    return next((voice for voice in candidates if voice.startswith(locale + "-")), candidates[0])
+    return next(
+        (voice for voice in candidates if voice.startswith(locale + "-")),
+        candidates[0],
+    )
 
 
 _validated_voices_cache = {}

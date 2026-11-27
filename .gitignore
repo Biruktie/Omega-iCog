@@ -15,7 +15,6 @@ memory/.channel/
 
 # venv
 .venv 
-venv/
 
 # editor backup files
 *~

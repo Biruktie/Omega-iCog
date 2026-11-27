@@ -91,10 +91,6 @@ TG_POLL_TIMEOUT: 20
 # edge-tts voice for the speak skill. Any voice from `edge-tts --list-voices`.
 # Default: en-US-AriaNeural
 EDGE_TTS_VOICE: en-US-AriaNeural
-# TTS provider order for the speak skill. Supported: edge, google.
-TTS_PROVIDER: edge
-# Empty disables fallback; google is the default fallback.
-TTS_FALLBACK_PROVIDER: google
 
 # WSchat
 # WebSocket endpoint URL (`ws://` or `wss://`). Required when `commchannel=websocket`.
