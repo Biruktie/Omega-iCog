@@ -201,6 +201,8 @@ def available_voices():
             if voices:
                 _available_voices_cache = voices
                 _available_voices_retry_after = 0.0
+            else:
+                _available_voices_retry_after = monotonic() + VOICE_CATALOGUE_RETRY_COOLDOWN
 
             return voices or []
 

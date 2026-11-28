@@ -97,7 +97,7 @@ Both environment names survive the container entrypoint. `scripts/omega`
 forwards the voice from its environment; staging/production deployments read
 the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
 
-Speech synthesis uses **Edge TTS first**, with automatic fallback to **Google TTS** if Edge synthesis fails, times out, returns empty audio, or cannot be used because of a voice catalogue outage.
+Speech synthesis uses **Edge TTS first**, with automatic fallback to **Google TTS** if Edge synthesis fails, times out, or returns empty audio. If the voice catalogue is unavailable, the configured Edge voice is retained so synthesis can still proceed.
 
 No provider-selection configuration is required. The fallback happens automatically.
 

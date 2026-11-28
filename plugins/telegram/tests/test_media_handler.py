@@ -10,7 +10,7 @@ SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 sys.path.insert(0, SRC_DIR)
 sys.path.insert(1, TELEGRAM_DIR)
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import media_handler as mh
 import speech_language as sl
@@ -355,11 +355,10 @@ def test_speak_success():
         mh._live_send_voice, mh._live_send_chat_action, mh._live_channel = orig_send, orig_action, orig_chan
 
 def test_speak_succeeds_when_edge_voice_catalogue_fails():
-    async def failing_list_voices():
-        raise RuntimeError("Edge voice catalogue unavailable")
-
     fake_edge = _fake_edge(None)
-    fake_edge.list_voices = failing_list_voices
+    fake_edge.list_voices = AsyncMock(
+        side_effect=RuntimeError("Edge voice catalogue unavailable")
+    )
 
     sent = {}
     actions = []
@@ -367,6 +366,7 @@ def test_speak_succeeds_when_edge_voice_catalogue_fails():
     with (
         patch.dict(sys.modules, {"edge_tts": fake_edge}),
         patch.object(sl, "_available_voices_cache", None),
+        patch.object(sl, "_available_voices_retry_after", 0.0),
         patch.object(mh, "_tts_allowed", return_value=True),
         patch.object(mh, "_prompt_is_unsafe", return_value=False),
         patch.object(mh, "_synthesise_speech", return_value=b"audio-bytes"),
@@ -388,6 +388,7 @@ def test_speak_succeeds_when_edge_voice_catalogue_fails():
     assert out == "VOICE_SENT", out
     assert sent["bytes"] == b"audio-bytes", sent
     assert "record_voice" in actions, actions
+    fake_edge.list_voices.assert_awaited_once()
 
 
 
@@ -461,28 +462,27 @@ def test_synthesise_speech_falls_back_when_edge_returns_empty_audio():
     assert result == b"google-mp3"
 
 
-def test_synthesise_speech_falls_back_on_edge_errors():
-    for error_message in ("403 Forbidden", "Edge TTS timed out"):
-        class FailingCommunicate:
-            def __init__(self, text, voice):
-                pass
+def test_synthesise_speech_falls_back_when_edge_times_out():
+    import asyncio
 
-            def stream(self):
-                async def fail():
-                    raise RuntimeError(error_message)
-                    yield None
+    class SlowCommunicate:
+        def __init__(self, text, voice):
+            pass
 
-                return fail()
+        async def stream(self):
+            await asyncio.sleep(1)
+            yield {"type": "audio", "data": b"edge-mp3"}
 
-        with patch.dict(sys.modules, {
-            "edge_tts": _fake_edge(FailingCommunicate),
+    with (
+        patch.dict(sys.modules, {
+            "edge_tts": _fake_edge(SlowCommunicate),
             "gtts": _fake_gtts(expected_lang="en"),
-        }):
-            result = mh._synthesise_speech(
-                "hello", "en-US-AriaNeural"
-            )
+        }),
+        patch.object(mh, "EDGE_TTS_TIMEOUT", 0.01),
+    ):
+        result = mh._synthesise_speech("hello", "en-US-AriaNeural")
 
-        assert result == b"google-mp3", result
+    assert result == b"google-mp3", result
 
 
 def test_google_language_mapping_matches_gtts_codes():
@@ -559,6 +559,22 @@ def test_google_tts_returns_none_when_request_times_out():
 
 
 
+def test_google_tts_returns_none_on_certificate_error():
+    import requests
+
+    fake_gtts = _fake_gtts(expected_lang="en")
+    with (
+        patch.dict(sys.modules, {"gtts": fake_gtts}),
+        patch.object(mh, "detect_language", return_value="en"),
+        patch.object(fake_gtts.gTTS, "write_to_fp",
+                     side_effect=requests.exceptions.SSLError("invalid certificate")) as write,
+    ):
+        result = mh._synthesise_google("Hello", "en-US-AriaNeural")
+
+    assert result is None
+    write.assert_called_once()
+
+
 if __name__ == "__main__":
     test_no_image_returns_marker()
     test_describe_memoizes_per_turn()
@@ -583,8 +599,9 @@ if __name__ == "__main__":
     test_synthesise_speech_uses_edge_tts()
     test_synthesise_speech_falls_back_to_google_tts()
     test_synthesise_speech_falls_back_when_edge_returns_empty_audio() 
-    test_synthesise_speech_falls_back_on_edge_errors()
+    test_synthesise_speech_falls_back_when_edge_times_out()
     test_google_language_mapping_matches_gtts_codes()
     test_synthesise_speech_maps_detected_norwegian_to_google_code()
     test_google_tts_returns_none_when_request_times_out()
+    test_google_tts_returns_none_on_certificate_error()
     print("all media_handler tests passed")

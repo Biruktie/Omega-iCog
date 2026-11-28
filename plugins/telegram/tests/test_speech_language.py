@@ -187,29 +187,20 @@ class VoiceCatalogueTests(unittest.TestCase):
             self.assertEqual(sl.available_voices(), VOICES)
             fetch.assert_awaited_once()
 
-    def test_failed_request_does_not_retry_during_cooldown(self):
-        with patch.object(sl, "monotonic", return_value=100), \
-                patch("edge_tts.list_voices", new_callable=AsyncMock,
-                    side_effect=TimeoutError("timeout")) as fetch:
-            self.assertEqual(sl.available_voices(), [])
-            self.assertEqual(sl.available_voices(), [])
+    def test_unavailable_catalogue_uses_cooldown_then_retries(self):
+        for outcome in (TimeoutError("timeout"), []):
+            with self.subTest(outcome=outcome):
+                sl._clear_available_voices_cache()
+                with patch.object(sl, "monotonic", side_effect=[100, 100, 100, 131]), \
+                        patch("edge_tts.list_voices", new_callable=AsyncMock,
+                              side_effect=[outcome, VOICES]) as fetch:
+                    self.assertEqual(sl.available_voices(), [])
+                    self.assertEqual(sl.available_voices(), [])
+                    fetch.assert_awaited_once()
 
-            fetch.assert_awaited_once()
-
-    def test_failed_request_retries_after_cooldown(self):
-        with patch.object(
-            sl,
-            "monotonic",
-            side_effect=[100, 100, 131],
-        ), patch(
-            "edge_tts.list_voices",
-            new_callable=AsyncMock,
-            side_effect=[TimeoutError("timeout"), VOICES],
-        ) as fetch:
-            self.assertEqual(sl.available_voices(), [])
-            self.assertEqual(sl.available_voices(), VOICES)
-
-            self.assertEqual(fetch.await_count, 2)
+                    self.assertEqual(sl.available_voices(), VOICES)
+                    self.assertEqual(sl.available_voices(), VOICES)
+                    self.assertEqual(fetch.await_count, 2)
 
     def test_clear_cache_resets_retry_cooldown(self):
         with patch.object(sl, "monotonic", return_value=100), \
