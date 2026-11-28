@@ -525,54 +525,44 @@ def test_synthesise_speech_maps_detected_norwegian_to_google_code():
     assert result == b"google-mp3", result
 
 
-def test_google_tts_returns_none_when_request_times_out():
+def test_google_tts_verifies_https_including_the_english_retry():
     import requests
 
-    calls = []
+    for language in ("en", "xx"):
+        response = requests.Response()
+        response.status_code = 200
+        response.raw = io.BytesIO(b'["jQ1olc","[\\"bXAz\\"]"]')
+        response.request = requests.Request("POST", "https://translate.google.com/").prepare()
+        with (
+            patch.object(mh, "detect_language", return_value=language),
+            patch.object(requests.Session, "send", return_value=response) as send,
+        ):
+            result = mh._synthesise_google("Hello", "en-US-AriaNeural")
 
-    class FakeGTTS:
-        def __init__(self, text, lang, timeout=None):
-            calls.append({
-                "text": text,
-                "lang": lang,
-                "timeout": timeout,
-            })
-
-        def write_to_fp(self, buf):
-            raise requests.Timeout("Google TTS request timed out")
-
-    with patch.dict(
-        sys.modules,
-        {"gtts": types.SimpleNamespace(gTTS=FakeGTTS)},
-    ):
-        result = mh._synthesise_google(
-            "Hello, how are you?",
-            "en-US-AriaNeural",
-        )
-
-    assert result is None
-    assert len(calls) == 1
-    assert calls[0]["timeout"] == mh.GOOGLE_TTS_TIMEOUT
-    assert calls[0]["timeout"][0] > 0
-    assert calls[0]["timeout"][1] > 0
+        assert result == b"mp3", result
+        send.assert_called_once()
+        assert send.call_args.kwargs["verify"] is True
+        assert send.call_args.kwargs["timeout"] == mh.GOOGLE_TTS_TIMEOUT
 
 
-
-
-def test_google_tts_returns_none_on_certificate_error():
+def test_google_tts_returns_none_on_network_errors():
     import requests
 
-    fake_gtts = _fake_gtts(expected_lang="en")
-    with (
-        patch.dict(sys.modules, {"gtts": fake_gtts}),
-        patch.object(mh, "detect_language", return_value="en"),
-        patch.object(fake_gtts.gTTS, "write_to_fp",
-                     side_effect=requests.exceptions.SSLError("invalid certificate")) as write,
+    for error in (
+        requests.Timeout("Google TTS request timed out"),
+        requests.exceptions.SSLError("invalid certificate"),
     ):
-        result = mh._synthesise_google("Hello", "en-US-AriaNeural")
+        with (
+            patch.object(mh, "detect_language", return_value="en"),
+            patch.object(requests.Session, "send", side_effect=error) as send,
+        ):
+            result = mh._synthesise_google("Hello", "en-US-AriaNeural")
 
-    assert result is None
-    write.assert_called_once()
+        assert result is None
+        send.assert_called_once()
+        assert send.call_args.kwargs["verify"] is True
+        assert send.call_args.kwargs["timeout"] == mh.GOOGLE_TTS_TIMEOUT
+        assert all(timeout > 0 for timeout in send.call_args.kwargs["timeout"])
 
 
 if __name__ == "__main__":
@@ -602,6 +592,6 @@ if __name__ == "__main__":
     test_synthesise_speech_falls_back_when_edge_times_out()
     test_google_language_mapping_matches_gtts_codes()
     test_synthesise_speech_maps_detected_norwegian_to_google_code()
-    test_google_tts_returns_none_when_request_times_out()
-    test_google_tts_returns_none_on_certificate_error()
+    test_google_tts_verifies_https_including_the_english_retry()
+    test_google_tts_returns_none_on_network_errors()
     print("all media_handler tests passed")

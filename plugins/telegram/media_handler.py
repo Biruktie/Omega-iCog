@@ -506,16 +506,40 @@ def _google_lang_from_voice(chunk_text, chunk_voice):
 
 
 def _synthesise_google(chunk_text, chunk_voice):
-    """Synthesize speech using Google TTS."""
+    """Synthesize speech using Google TTS over verified HTTPS."""
     import io
+    import re
+    import urllib.request
+    import requests
     from gtts import gTTS
+
+    class VerifiedGTTS(gTTS):
+        # gTTS has no verification option; reuse its prepared requests, not its transport.
+        def stream(self):
+            with requests.Session() as session:
+                for request in self._prepare_requests():
+                    response = session.send(
+                        request=request,
+                        verify=True,
+                        proxies=urllib.request.getproxies(),
+                        timeout=self.timeout,
+                    )
+                    response.raise_for_status()
+                    for line in response.iter_lines(chunk_size=1024):
+                        line = line.decode("utf-8")
+                        if "jQ1olc" not in line:
+                            continue
+                        audio = re.search(r'jQ1olc","\[\\"(.*)\\"]', line)
+                        if audio is None:
+                            raise RuntimeError("Google TTS returned invalid audio data")
+                        yield base64.b64decode(audio.group(1))
 
     language = _google_lang_from_voice(chunk_text, chunk_voice)
 
     try:
         with io.BytesIO() as buf:
-            gTTS(
-                text=chunk_text, 
+            VerifiedGTTS(
+                text=chunk_text,
                 lang=language,
                 timeout=GOOGLE_TTS_TIMEOUT
             ).write_to_fp(buf)
@@ -539,8 +563,8 @@ def _synthesise_google(chunk_text, chunk_voice):
 
     try:
         with io.BytesIO() as buf:
-            gTTS(
-                text=chunk_text, 
+            VerifiedGTTS(
+                text=chunk_text,
                 lang="en",
                 timeout=GOOGLE_TTS_TIMEOUT
             ).write_to_fp(buf)

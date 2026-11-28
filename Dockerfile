@@ -71,18 +71,6 @@ RUN for req in /tmp/plugins/*/requirements.txt; do \
     done \
  && rm -rf /tmp/plugins
 
-# gTTS 2.5.4 disables certificate verification internally; keep HTTPS verified.
-RUN python3 - <<'PY'
-from pathlib import Path
-import gtts.tts
-
-path = Path(gtts.tts.__file__)
-source = path.read_text()
-if source.count("verify=False,") != 1:
-    raise SystemExit("Unexpected gTTS transport; review the TLS verification patch")
-path.write_text(source.replace("verify=False,", "verify=True,", 1))
-PY
-
 # Pre-download the sentence-transformers model so runtime does not need network access.
 RUN mkdir -p "${HF_HOME}" "${SENTENCE_TRANSFORMERS_HOME}" \
  && python3 - <<PY
