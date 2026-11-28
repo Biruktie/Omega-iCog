@@ -3,7 +3,6 @@ from html.parser import HTMLParser
 import re
 
 import pyromark
-
 import emoji
 
 _URL = re.compile(r"""
@@ -49,7 +48,6 @@ class _HTMLText(HTMLParser):
 
 def _markdown_text(text):
     """Keep textual parser events, omitting image subtrees and destinations."""
-
     source = text.encode("utf-8")  # Parser ranges are UTF-8 byte offsets.
     parts = []
     previous_end = 0
