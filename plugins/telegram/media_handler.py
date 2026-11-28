@@ -350,6 +350,7 @@ def generate_and_send(prompt):
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
 EDGE_TTS_TIMEOUT = 30
+GOOGLE_TTS_TIMEOUT = (5, 15)
 RECORDING_REFRESH_SECONDS = 4
 MAX_VOICE_REQUESTS = 100
 _voice_requests = OrderedDict()
@@ -513,7 +514,11 @@ def _synthesise_google(chunk_text, chunk_voice):
 
     try:
         with io.BytesIO() as buf:
-            gTTS(text=chunk_text, lang=language).write_to_fp(buf)
+            gTTS(
+                text=chunk_text, 
+                lang=language,
+                timeout=GOOGLE_TTS_TIMEOUT
+            ).write_to_fp(buf)
             return buf.getvalue()
 
     except ValueError:
@@ -534,7 +539,11 @@ def _synthesise_google(chunk_text, chunk_voice):
 
     try:
         with io.BytesIO() as buf:
-            gTTS(text=chunk_text, lang="en").write_to_fp(buf)
+            gTTS(
+                text=chunk_text, 
+                lang="en",
+                timeout=GOOGLE_TTS_TIMEOUT
+            ).write_to_fp(buf)
             return buf.getvalue()
     except Exception as exc:
         logger.warning("Google TTS synthesis failed: %s", exc)

@@ -5,6 +5,7 @@ from functools import lru_cache
 import logging
 import re
 import threading
+from time import monotonic
 
 from text_splitter import split_for_telegram
 
@@ -167,15 +168,21 @@ def _segments(text):
 
 _available_voices_cache = None
 _available_voices_lock = threading.Lock()
+_available_voices_retry_after = 0.0
+
+VOICE_CATALOGUE_RETRY_COOLDOWN = 30
 
 
 def available_voices():
     """Load Edge's voice catalogue, caching successes only for retries after outages."""
-    global _available_voices_cache
+    global _available_voices_cache, _available_voices_retry_after
 
     with _available_voices_lock:
         if _available_voices_cache is not None:
             return _available_voices_cache
+
+        if monotonic() < _available_voices_retry_after:
+            return []
 
         try:
             import edge_tts
@@ -193,10 +200,13 @@ def available_voices():
 
             if voices:
                 _available_voices_cache = voices
+                _available_voices_retry_after = 0.0
 
             return voices or []
 
         except Exception as exc:
+            _available_voices_retry_after = monotonic() + VOICE_CATALOGUE_RETRY_COOLDOWN
+            
             logger.warning(
                 "Could not load Edge TTS voice catalogue: %s", exc
             )
@@ -204,13 +214,11 @@ def available_voices():
 
 
 def _clear_available_voices_cache():
-    global _available_voices_cache
+    global _available_voices_cache, _available_voices_retry_after
 
     with _available_voices_lock:
         _available_voices_cache = None
-
-    with _validated_voices_lock:
-        _validated_voices_cache.clear()
+        _available_voices_retry_after = 0.0
 
 
 available_voices.cache_clear = _clear_available_voices_cache
@@ -273,16 +281,11 @@ def select_voice(language, configured_voice):
     )
 
 
-_validated_voices_cache = {}
-_validated_voices_lock = threading.Lock()
-
-
 def validated_voice(configured_voice):
-    """Cache validation results only when the Edge catalogue is available."""
-
+    """Validate the configured voice against Edge's cached voice catalogue."""
     voices = available_voices()
 
-    # Never cache results when the catalogue is unavailable.
+    # Do not reject a configured voice when the catalogue is unavailable.
     if not voices:
         logger.warning(
             "Edge TTS voice catalogue unavailable; retaining configured voice %r",
@@ -290,38 +293,19 @@ def validated_voice(configured_voice):
         )
         return configured_voice
 
-    with _validated_voices_lock:
-        if configured_voice in _validated_voices_cache:
-            return _validated_voices_cache[configured_voice]
+    if any(
+        voice.get("ShortName") == configured_voice
+        for voice in voices
+    ):
+        return configured_voice
 
-        if any(
-            voice.get("ShortName") == configured_voice
-            for voice in voices
-        ):
-            result = configured_voice
-        else:
-            logger.warning(
-                "Unknown configured voice %r; using %s",
-                configured_voice,
-                DEFAULT_VOICE,
-            )
-            result = DEFAULT_VOICE
+    logger.warning(
+        "Unknown configured voice %r; using %s",
+        configured_voice,
+        DEFAULT_VOICE,
+    )
+    return DEFAULT_VOICE
 
-        if len(_validated_voices_cache) >= 64:
-            _validated_voices_cache.pop(
-                next(iter(_validated_voices_cache))
-            )
-
-        _validated_voices_cache[configured_voice] = result
-        return result
-
-
-def _clear_validated_voice_cache():
-    with _validated_voices_lock:
-        _validated_voices_cache.clear()
-
-
-validated_voice.cache_clear = _clear_validated_voice_cache
 
 def speech_parts(text, configured_voice=DEFAULT_VOICE):
     """Select the reply voice, switching sentences it cannot read; retain sentences for chunk retries."""

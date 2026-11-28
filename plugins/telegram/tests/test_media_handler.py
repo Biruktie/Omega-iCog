@@ -21,11 +21,12 @@ def _fake_gtts(audio=b"google-mp3", expected_text=None, expected_lang=None):
     fake_gtts = types.ModuleType("gtts")
 
     class FakeGTTS:
-        def __init__(self, text, lang):
+        def __init__(self, text, lang, timeout=None):
             if expected_text is not None:
                 assert text == expected_text
             if expected_lang is not None:
                 assert lang == expected_lang
+            self.timeout = timeout
 
         def write_to_fp(self, buf):
             buf.write(audio)
@@ -366,7 +367,6 @@ def test_speak_succeeds_when_edge_voice_catalogue_fails():
     with (
         patch.dict(sys.modules, {"edge_tts": fake_edge}),
         patch.object(sl, "_available_voices_cache", None),
-        patch.object(sl, "_validated_voices_cache", {}),
         patch.object(mh, "_tts_allowed", return_value=True),
         patch.object(mh, "_prompt_is_unsafe", return_value=False),
         patch.object(mh, "_synthesise_speech", return_value=b"audio-bytes"),
@@ -525,6 +525,38 @@ def test_synthesise_speech_maps_detected_norwegian_to_google_code():
     assert result == b"google-mp3", result
 
 
+def test_google_tts_returns_none_when_request_times_out():
+    import requests
+
+    calls = []
+
+    class FakeGTTS:
+        def __init__(self, text, lang, timeout=None):
+            calls.append({
+                "text": text,
+                "lang": lang,
+                "timeout": timeout,
+            })
+
+        def write_to_fp(self, buf):
+            raise requests.Timeout("Google TTS request timed out")
+
+    with patch.dict(
+        sys.modules,
+        {"gtts": types.SimpleNamespace(gTTS=FakeGTTS)},
+    ):
+        result = mh._synthesise_google(
+            "Hello, how are you?",
+            "en-US-AriaNeural",
+        )
+
+    assert result is None
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == mh.GOOGLE_TTS_TIMEOUT
+    assert calls[0]["timeout"][0] > 0
+    assert calls[0]["timeout"][1] > 0
+
+
 
 
 if __name__ == "__main__":
@@ -554,4 +586,5 @@ if __name__ == "__main__":
     test_synthesise_speech_falls_back_on_edge_errors()
     test_google_language_mapping_matches_gtts_codes()
     test_synthesise_speech_maps_detected_norwegian_to_google_code()
+    test_google_tts_returns_none_when_request_times_out()
     print("all media_handler tests passed")

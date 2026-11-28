@@ -27,7 +27,6 @@ RUSSIAN = "Это проверка русского голоса. Пожалуй
 class SpeechLanguageTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(mh, "speech_chunks", side_effect=lambda parts: [[p] for p in parts]))
-        sl.validated_voice.cache_clear()
         self.catalogue = self.enterContext(patch.object(
             sl, "available_voices", return_value=VOICES))
 
@@ -178,8 +177,8 @@ class SpeechLanguageTests(unittest.TestCase):
 
 class VoiceCatalogueTests(unittest.TestCase):
     def setUp(self):
-        sl.available_voices.cache_clear()
-        self.addCleanup(sl.available_voices.cache_clear)
+        sl._clear_available_voices_cache()
+        self.addCleanup(sl._clear_available_voices_cache)
 
     def test_success_is_cached(self):
         with patch("edge_tts.list_voices", new_callable=AsyncMock,
@@ -188,10 +187,40 @@ class VoiceCatalogueTests(unittest.TestCase):
             self.assertEqual(sl.available_voices(), VOICES)
             fetch.assert_awaited_once()
 
-    def test_failed_request_can_retry(self):
-        with patch("edge_tts.list_voices", new_callable=AsyncMock,
-                   side_effect=[TimeoutError("timeout"), VOICES]) as fetch:
+    def test_failed_request_does_not_retry_during_cooldown(self):
+        with patch.object(sl, "monotonic", return_value=100), \
+                patch("edge_tts.list_voices", new_callable=AsyncMock,
+                    side_effect=TimeoutError("timeout")) as fetch:
             self.assertEqual(sl.available_voices(), [])
+            self.assertEqual(sl.available_voices(), [])
+
+            fetch.assert_awaited_once()
+
+    def test_failed_request_retries_after_cooldown(self):
+        with patch.object(
+            sl,
+            "monotonic",
+            side_effect=[100, 100, 131],
+        ), patch(
+            "edge_tts.list_voices",
+            new_callable=AsyncMock,
+            side_effect=[TimeoutError("timeout"), VOICES],
+        ) as fetch:
+            self.assertEqual(sl.available_voices(), [])
+            self.assertEqual(sl.available_voices(), VOICES)
+
+            self.assertEqual(fetch.await_count, 2)
+
+    def test_clear_cache_resets_retry_cooldown(self):
+        with patch.object(sl, "monotonic", return_value=100), \
+                patch("edge_tts.list_voices", new_callable=AsyncMock,
+                    side_effect=[TimeoutError("timeout"), VOICES]) as fetch:
+
+            self.assertEqual(sl.available_voices(), [])
+            fetch.assert_awaited_once()
+
+            sl._clear_available_voices_cache()
+
             self.assertEqual(sl.available_voices(), VOICES)
             self.assertEqual(fetch.await_count, 2)
 

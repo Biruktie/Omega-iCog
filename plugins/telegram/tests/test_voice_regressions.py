@@ -44,7 +44,6 @@ VOICES = [
 
 class RoutingTests(unittest.TestCase):
     def setUp(self):
-        sl.validated_voice.cache_clear()
         self.catalogue = self.enterContext(patch.object(sl, "available_voices", return_value=VOICES))
 
     def test_reported_short_phrases(self):
